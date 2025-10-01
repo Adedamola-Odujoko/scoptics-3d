@@ -1,4 +1,4 @@
-// src/MatchDataLoader.js (FINAL VERSION 3.0)
+// src/MatchDataLoader.js (FINAL CORRECTED-AXIS VERSION)
 
 export class MatchDataLoader {
   constructor(metadataUrl, trackingDataUrl) {
@@ -46,7 +46,7 @@ export class MatchDataLoader {
     metadata.players.forEach((p) => {
       this.trackableObjectMap.set(p.trackable_object, {
         id: `P${p.id}`,
-        name: p.last_name || "Player", // <-- CHANGED to last name only
+        name: p.last_name || "Player",
         number: p.number,
         team: p.team_id === homeTeamId ? homeTeamName : awayTeamName,
       });
@@ -55,7 +55,7 @@ export class MatchDataLoader {
     metadata.referees.forEach((r) => {
       this.trackableObjectMap.set(r.trackable_object, {
         id: `R${r.id}`,
-        name: r.last_name || "Referee", // <-- CHANGED to last name only
+        name: r.last_name || "Referee",
         team: "Referee",
       });
     });
@@ -83,8 +83,10 @@ export class MatchDataLoader {
             id: entityInfo.id,
             name: entityInfo.name,
             team: entityInfo.team,
-            x: trackedObj.x * 100,
-            y: trackedObj.y * 100,
+            // --- THIS IS THE FIX ---
+            // We multiply the incoming x-coordinate by -1 to flip the axis.
+            x: -trackedObj.x * 100,
+            y: --trackedObj.y * 100,
           });
         }
       }
