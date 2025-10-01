@@ -6,6 +6,9 @@ import {
   DirectionalLight,
   GridHelper,
   Color,
+  Raycaster,
+  Vector2,
+  Vector3,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
@@ -120,7 +123,6 @@ async function main() {
     loadingOverlay.style.opacity = 1;
   }
 
-  // --- 1. Load Data ---
   const loader = new MatchDataLoader(
     "/match_metadata.json",
     "/structured_data.json"
@@ -135,7 +137,6 @@ async function main() {
     return;
   }
 
-  // --- 2. Setup Scene and Renderer ---
   const scene = new Scene();
   scene.background = new Color(0x0a0a0a);
   const camera = new PerspectiveCamera(
@@ -150,7 +151,6 @@ async function main() {
   camera.position.set(0, 30, 70);
   camera.lookAt(0, 0, 0);
 
-  // --- 2.1 Setup 2D Label Renderer ---
   let labelRenderer = new CSS2DRenderer();
   labelRenderer.setSize(window.innerWidth, window.innerHeight);
   labelRenderer.domElement.style.position = "absolute";
@@ -166,7 +166,6 @@ async function main() {
   initPitch(scene);
   scene.add(new GridHelper(120, 120, 0x444444, 0x222222));
 
-  // --- 3. Setup Player Management ---
   const homeTeamName = metadata.home_team.name;
   const awayTeamName = metadata.away_team.name;
   const teamColorMap = {
@@ -177,7 +176,6 @@ async function main() {
   };
   const playerManager = new PlayerManager(scene, teamColorMap);
 
-  // --- 4. Prepare Playback ---
   const buffer = new PlaybackBuffer();
   allFrames.forEach((frame) => {
     buffer.push(frame.players, { videoTime: frame.frame_time_ms });
@@ -193,11 +191,17 @@ async function main() {
   const totalDurationMs =
     buffer.last()?.videoTime - buffer.first()?.videoTime || 0;
 
-  // --- 5. Initialize UI and Event Handlers ---
   const ui = createControlsUI();
   ui.playBtn.innerText = "Play ▶";
   ui.slider.value = 0;
   ui.timeLabel.innerText = `-${formatTimeMsDiff(totalDurationMs)}`;
+
+  let cameraMode = "orbit";
+  let followedPlayerID = null;
+  const raycaster = new Raycaster();
+  const mouse = new Vector2();
+  const thirdPersonOffset = new Vector3(0, 4, -8);
+  const cameraLookAt = new Vector3();
 
   ui.playbackRateSelect.addEventListener("change", () => {
     const v = Number(ui.playbackRateSelect.value);
@@ -251,6 +255,28 @@ async function main() {
     sliderSeeking = false;
   });
 
+  function onPlayerClick(event) {
+    if (controls.enabled === false && cameraMode !== "orbit") return;
+
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+
+    const playerMeshes = playerManager.getPlayerMeshes();
+    const intersects = raycaster.intersectObjects(playerMeshes);
+
+    if (intersects.length > 0) {
+      const clickedPlayer = intersects[0].object.userData.player;
+      if (clickedPlayer && clickedPlayer.playerData) {
+        followedPlayerID = clickedPlayer.playerData.id;
+        cameraMode = "thirdPerson";
+      }
+    }
+  }
+
+  window.addEventListener("dblclick", onPlayerClick);
+
   window.addEventListener("keydown", (ev) => {
     if (ev.code === "Space") {
       ev.preventDefault();
@@ -261,6 +287,14 @@ async function main() {
       ui.back10.click();
     } else if (ev.code === "ArrowRight") {
       ui.fwd10.click();
+    } else if (ev.key === "Escape" || ev.key === "3") {
+      cameraMode = "orbit";
+      followedPlayerID = null;
+    }
+
+    if (followedPlayerID) {
+      if (ev.key === "1") cameraMode = "thirdPerson";
+      if (ev.key === "2") cameraMode = "pov";
     }
   });
 
@@ -271,7 +305,6 @@ async function main() {
     }, 500);
   }
 
-  // --- 6. Render Loop ---
   renderer.setAnimationLoop(() => {
     const now = performance.now();
     const dt = now - lastTick;
@@ -306,6 +339,51 @@ async function main() {
       playerManager.updateWithInterpolation(prev, next, interpAlpha);
     }
 
+    playerManager.smoothAll(0.15);
+
+    // --- Camera Logic ---
+    const followedPlayer = followedPlayerID
+      ? playerManager.playerMap.get(followedPlayerID)
+      : null;
+
+    if (followedPlayer && followedPlayer.mesh) {
+      controls.enabled = false;
+
+      if (cameraMode === "thirdPerson") {
+        const targetPosition = followedPlayer.mesh.position
+          .clone()
+          .add(thirdPersonOffset);
+        camera.position.lerp(targetPosition, 0.1);
+        camera.lookAt(followedPlayer.mesh.position);
+      } else if (cameraMode === "pov") {
+        camera.position.copy(followedPlayer.mesh.position);
+        camera.position.y += 1.6;
+
+        const ball = playerManager.ball;
+        if (ball) {
+          camera.lookAt(ball.mesh.position);
+        } else {
+          if (followedPlayer.velocity.lengthSq() > 0.0001) {
+            cameraLookAt
+              .copy(camera.position)
+              .add(followedPlayer.velocity.normalize());
+          } else {
+            camera.getWorldDirection(cameraLookAt);
+            cameraLookAt.add(camera.position);
+          }
+          camera.lookAt(cameraLookAt);
+        }
+      }
+    } else {
+      if (followedPlayerID) {
+        followedPlayerID = null;
+        cameraMode = "orbit";
+      }
+      controls.enabled = true;
+      controls.update();
+    }
+
+    // --- UI Update ---
     if (span.end > span.start) {
       const frac = (playbackClock - span.start) / (span.end - span.start);
       if (!sliderSeeking) {
@@ -317,8 +395,6 @@ async function main() {
         : `-${formatTimeMsDiff(timeDiff)}`;
     }
 
-    playerManager.smoothAll(0.15);
-    controls.update();
     renderer.render(scene, camera);
     labelRenderer.render(scene, camera);
   });

@@ -1,70 +1,75 @@
-// src/Player.js (FINAL VISUAL VERSION 3.0)
+// src/Player.js (FINAL CORRECTED HEIGHT VERSION)
 
 import {
   Vector3,
-  CylinderGeometry,
   SphereGeometry,
   MeshStandardMaterial,
   Mesh,
   Color,
 } from "three";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 
 export class Player {
-  /**
-   * @param {THREE.Scene} scene The main scene.
-   * @param {object} playerData The initial data for the player, must include a `name`.
-   * @param {THREE.Color} initialColor The player's team color.
-   */
-  constructor(scene, playerData, initialColor) {
+  constructor(scene, playerData, initialColor, playerManager) {
+    this.playerData = playerData;
+    this.playerManager = playerManager;
+
     const playerMaterial = new MeshStandardMaterial({
       color: initialColor,
       metalness: 0.2,
       roughness: 0.6,
     });
 
-    // --- 1. Create a Sphere for the Ball OR a Cylinder for Players ---
-    if (playerData.name === "Ball") {
-      // --- BALL LOGIC ---
-      const ballRadius = 0.22; // Smaller radius for the ball
+    if (this.playerData.name === "Ball") {
+      const ballRadius = 0.15;
       const ballGeometry = new SphereGeometry(ballRadius, 16, 16);
       this.mesh = new Mesh(ballGeometry, playerMaterial);
-      // Lift the ball so it sits on the ground plane
       this.mesh.position.y = ballRadius;
     } else {
-      // --- PLAYER/REFEREE LOGIC ---
-      const height = 1.6; // Taller
-      const radius = 0.25; // Slimmer
-      const playerGeometry = new CylinderGeometry(radius, radius, height, 16);
+      const height = 1.8;
+      const width = 0.4;
+      const roundingRadius = 0.2;
+      const playerGeometry = new RoundedBoxGeometry(
+        width,
+        height,
+        width,
+        4,
+        roundingRadius
+      );
       this.mesh = new Mesh(playerGeometry, playerMaterial);
-      // Lift the cylinder by half its height to sit on the ground plane
       this.mesh.position.y = height / 2;
 
-      // --- 2. Create the Name Label (Only for players/refs) ---
       const labelDiv = document.createElement("div");
       labelDiv.className = "player-label";
-      labelDiv.textContent = playerData.name;
+      labelDiv.textContent = this.playerData.name;
+      labelDiv.style.fontSize = "9px";
       labelDiv.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
       labelDiv.style.color = "white";
-      labelDiv.style.padding = "2px 5px";
+      labelDiv.style.padding = "1px 4px";
       labelDiv.style.borderRadius = "3px";
-      labelDiv.style.fontSize = "10px"; // <-- REDUCED FONT SIZE
       labelDiv.style.fontFamily = "sans-serif";
-      labelDiv.style.pointerEvents = "none"; // Prevent labels from blocking mouse events
+      labelDiv.style.pointerEvents = "none";
 
       this.label = new CSS2DObject(labelDiv);
-      // Position label above the cylinder
       this.label.position.set(0, height / 2 + 0.3, 0);
       this.mesh.add(this.label);
     }
 
-    // --- 3. Finalize ---
+    this.mesh.userData.player = this;
     scene.add(this.mesh);
     this.targetRoot = new Vector3();
+    // Initialize targetRoot with the correct starting position to be safe
+    this.targetRoot.copy(this.mesh.position);
     this.currentColor = initialColor;
   }
 
   updateTarget(targetPosition, newColor) {
+    // --- THIS IS THE CRITICAL FIX ---
+    // We completely ignore the Y value from the manager (`targetPosition.y` which is 0).
+    // Instead of reading the potentially inaccurate `this.mesh.position.y`,
+    // we set the target's Y to be the SAME as our initial, correct Y position.
+    // This breaks the sinking feedback loop.
     this.targetRoot.set(
       targetPosition.x,
       this.mesh.position.y,
@@ -79,14 +84,18 @@ export class Player {
 
   smooth(alpha) {
     this.mesh.position.lerp(this.targetRoot, alpha);
+
+    if (this.playerData.name !== "Ball" && this.playerManager.ball) {
+      const ballPosition = this.playerManager.ball.mesh.position.clone();
+      ballPosition.y = this.mesh.position.y;
+      this.mesh.lookAt(ballPosition);
+    }
   }
 
   destroy(scene) {
-    // Check if the label exists before trying to remove its element
     if (this.label && this.label.element) {
       this.label.element.remove();
     }
-
     scene.remove(this.mesh);
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
