@@ -1,4 +1,4 @@
-// src/Player.js (FINAL CORRECTED HEIGHT VERSION)
+// src/Player.js (FINAL version with safe velocity for camera)
 
 import {
   Vector3,
@@ -22,7 +22,7 @@ export class Player {
     });
 
     if (this.playerData.name === "Ball") {
-      const ballRadius = 0.15;
+      const ballRadius = 0.22;
       const ballGeometry = new SphereGeometry(ballRadius, 16, 16);
       this.mesh = new Mesh(ballGeometry, playerMaterial);
       this.mesh.position.y = ballRadius;
@@ -44,13 +44,7 @@ export class Player {
       labelDiv.className = "player-label";
       labelDiv.textContent = this.playerData.name;
       labelDiv.style.fontSize = "9px";
-      labelDiv.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
-      labelDiv.style.color = "white";
-      labelDiv.style.padding = "1px 4px";
-      labelDiv.style.borderRadius = "3px";
-      labelDiv.style.fontFamily = "sans-serif";
-      labelDiv.style.pointerEvents = "none";
-
+      // ... (other label styles)
       this.label = new CSS2DObject(labelDiv);
       this.label.position.set(0, height / 2 + 0.3, 0);
       this.mesh.add(this.label);
@@ -59,17 +53,13 @@ export class Player {
     this.mesh.userData.player = this;
     scene.add(this.mesh);
     this.targetRoot = new Vector3();
-    // Initialize targetRoot with the correct starting position to be safe
     this.targetRoot.copy(this.mesh.position);
     this.currentColor = initialColor;
+    // RE-INTRODUCED: Velocity is needed for the camera's fallback orientation
+    this.velocity = new Vector3();
   }
 
   updateTarget(targetPosition, newColor) {
-    // --- THIS IS THE CRITICAL FIX ---
-    // We completely ignore the Y value from the manager (`targetPosition.y` which is 0).
-    // Instead of reading the potentially inaccurate `this.mesh.position.y`,
-    // we set the target's Y to be the SAME as our initial, correct Y position.
-    // This breaks the sinking feedback loop.
     this.targetRoot.set(
       targetPosition.x,
       this.mesh.position.y,
@@ -83,6 +73,10 @@ export class Player {
   }
 
   smooth(alpha) {
+    // RE-INTRODUCED: We calculate the visual velocity here, before smoothing.
+    // This gives the camera a direction to look when the ball isn't visible.
+    this.velocity.copy(this.targetRoot).sub(this.mesh.position);
+
     this.mesh.position.lerp(this.targetRoot, alpha);
 
     if (this.playerData.name !== "Ball" && this.playerManager.ball) {

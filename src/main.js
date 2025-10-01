@@ -1,3 +1,5 @@
+// src/main.js (COMPLETE, FINAL POLISHED VERSION)
+
 import {
   Scene,
   PerspectiveCamera,
@@ -115,6 +117,48 @@ function formatTimeMsDiff(msDiff) {
   return `${mm}:${ss}`;
 }
 
+function createTimestampLocatorUI() {
+  const locator = document.createElement("div");
+  locator.id = "timestamp-locator";
+  locator.style.position = "absolute";
+  locator.style.top = "14px";
+  locator.style.left = "14px";
+  locator.style.display = "flex";
+  locator.style.alignItems = "center";
+  locator.style.gap = "6px";
+  locator.style.padding = "6px 10px";
+  locator.style.background = "rgba(0,0,0,0.45)";
+  locator.style.borderRadius = "8px";
+  locator.style.zIndex = "999";
+  locator.style.fontFamily = "sans-serif";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "mm:ss";
+  input.style.width = "50px";
+  input.style.padding = "4px";
+  input.style.border = "1px solid #444";
+  input.style.borderRadius = "4px";
+  input.style.background = "#222";
+  input.style.color = "#ddd";
+  input.style.textAlign = "center";
+
+  const btn = document.createElement("button");
+  btn.innerText = "Go";
+  btn.style.padding = "4px 10px";
+  btn.style.border = "none";
+  btn.style.background = "#333";
+  btn.style.color = "#ddd";
+  btn.style.borderRadius = "4px";
+  btn.style.cursor = "pointer";
+
+  locator.appendChild(input);
+  locator.appendChild(btn);
+  document.body.appendChild(locator);
+
+  return { container: locator, input, button: btn };
+}
+
 async function main() {
   const container = document.getElementById("canvas-container");
   const loadingOverlay = document.getElementById("loading-overlay");
@@ -192,9 +236,11 @@ async function main() {
     buffer.last()?.videoTime - buffer.first()?.videoTime || 0;
 
   const ui = createControlsUI();
+  const locatorUI = createTimestampLocatorUI();
+
   ui.playBtn.innerText = "Play ▶";
   ui.slider.value = 0;
-  ui.timeLabel.innerText = `-${formatTimeMsDiff(totalDurationMs)}`;
+  ui.timeLabel.innerText = formatTimeMsDiff(0);
 
   let cameraMode = "orbit";
   let followedPlayerID = null;
@@ -202,6 +248,38 @@ async function main() {
   const mouse = new Vector2();
   const thirdPersonOffset = new Vector3(0, 4, -8);
   const cameraLookAt = new Vector3();
+
+  const handleGoToTimestamp = () => {
+    const timeStr = locatorUI.input.value;
+    if (!timeStr || !timeStr.includes(":")) {
+      console.warn("Invalid timestamp format. Please use mm:ss");
+      return;
+    }
+
+    const parts = timeStr.split(":");
+    const minutes = parseInt(parts[0], 10);
+    const seconds = parseInt(parts[1], 10);
+
+    if (isNaN(minutes) || isNaN(seconds)) {
+      console.warn("Invalid numbers in timestamp. Please use mm:ss");
+      return;
+    }
+
+    const targetMs = (minutes * 60 + seconds) * 1000;
+    const span = buffer.timeSpan();
+
+    playbackClock = Math.max(span.start, Math.min(span.end, targetMs));
+
+    isPlaying = false;
+    ui.playBtn.innerText = "Play ▶";
+  };
+
+  locatorUI.button.addEventListener("click", handleGoToTimestamp);
+  locatorUI.input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      handleGoToTimestamp();
+    }
+  });
 
   ui.playbackRateSelect.addEventListener("change", () => {
     const v = Number(ui.playbackRateSelect.value);
@@ -341,7 +419,6 @@ async function main() {
 
     playerManager.smoothAll(0.15);
 
-    // --- Camera Logic ---
     const followedPlayer = followedPlayerID
       ? playerManager.playerMap.get(followedPlayerID)
       : null;
@@ -363,7 +440,10 @@ async function main() {
         if (ball) {
           camera.lookAt(ball.mesh.position);
         } else {
-          if (followedPlayer.velocity.lengthSq() > 0.0001) {
+          if (
+            followedPlayer.velocity &&
+            followedPlayer.velocity.lengthSq() > 0.0001
+          ) {
             cameraLookAt
               .copy(camera.position)
               .add(followedPlayer.velocity.normalize());
@@ -389,10 +469,13 @@ async function main() {
       if (!sliderSeeking) {
         ui.slider.value = Math.floor(frac * Number(ui.slider.max));
       }
-      const timeDiff = Math.max(0, span.end - playbackClock);
-      ui.timeLabel.innerText = isLive
-        ? "END"
-        : `-${formatTimeMsDiff(timeDiff)}`;
+
+      const timeElapsed = playbackClock - span.start;
+      if (isLive) {
+        ui.timeLabel.innerText = "END";
+      } else {
+        ui.timeLabel.innerText = formatTimeMsDiff(timeElapsed);
+      }
     }
 
     renderer.render(scene, camera);
