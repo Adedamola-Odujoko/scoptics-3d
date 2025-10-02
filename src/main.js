@@ -23,9 +23,6 @@ import { PlaybackBuffer } from "./PlaybackBuffer.js";
 import { createTelestratorUI } from "./TelestratorUI.js";
 import { TelestratorManager } from "./TelestratorManager.js";
 
-// The createControlsUI, formatTimeMsDiff, and createTimestampLocatorUI functions
-// remain EXACTLY THE SAME as in your original file.
-
 function createControlsUI() {
   const ctrl = document.createElement("div");
   ctrl.id = "playback-controls";
@@ -233,12 +230,11 @@ async function main() {
   };
   const playerManager = new PlayerManager(scene, teamColorMap);
 
-  // --- UPDATED TelestratorManager INSTANTIATION ---
   const telestratorManager = new TelestratorManager(
     scene,
     camera,
     groundPlane,
-    playerManager, // <-- Pass the player manager
+    playerManager,
     {
       onDrawStart: () => {
         if (isPlaying) {
@@ -283,9 +279,6 @@ async function main() {
   const raycaster = new Raycaster();
   const mouse = new Vector2();
   const thirdPersonOffset = new Vector3(0, 4, -8);
-  const cameraLookAt = new Vector3();
-
-  // ... All UI event listeners (handleGoToTimestamp, playbackRate, etc.) are the same
 
   const handleGoToTimestamp = () => {
     const timeStr = locatorUI.input.value;
@@ -385,7 +378,6 @@ async function main() {
     telestratorManager.handleMouseUp(event)
   );
 
-  // ... Keyboard event listeners are the same
   window.addEventListener("keydown", (ev) => {
     if (ev.code === "Space") {
       ev.preventDefault();
@@ -413,15 +405,16 @@ async function main() {
     }, 500);
   }
 
+  const worldPlayerPos = new Vector3();
+  const localPlayerPos = new Vector3();
+
   renderer.setAnimationLoop(() => {
     const now = performance.now();
     const dt = now - lastTick;
     lastTick = now;
-
     if (isPlaying && dt > 0) {
       playbackClock += dt * playbackRate;
     }
-
     const span = buffer.timeSpan();
     if (playbackClock >= span.end) {
       playbackClock = span.end;
@@ -433,7 +426,6 @@ async function main() {
     } else {
       isLive = false;
     }
-
     const frames = buffer.findFramesForInterpolation(playbackClock);
     if (frames) {
       const { prev, next } = frames;
@@ -444,11 +436,46 @@ async function main() {
       }
       playerManager.updateWithInterpolation(prev, next, interpAlpha);
     }
-
     playerManager.smoothAll(0.15);
-
-    // --- NEW: Update Telestrator animations every frame ---
     telestratorManager.update();
+
+    const zones = telestratorManager.getZones();
+    const playersToHighlight = new Set();
+    if (zones.length > 0) {
+      for (const player of playerManager.playerMap.values()) {
+        if (!player.mesh || player.playerData.name === "Ball") continue;
+        let isInsideAnyZone = false;
+        for (const zone of zones) {
+          player.mesh.getWorldPosition(worldPlayerPos);
+          if (zone.userData.type === "circle") {
+            const distance = zone.position.distanceTo(worldPlayerPos);
+            if (distance <= zone.scale.x) {
+              isInsideAnyZone = true;
+              break;
+            }
+          } else if (zone.userData.type === "box") {
+            zone.worldToLocal(localPlayerPos.copy(worldPlayerPos));
+            if (
+              Math.abs(localPlayerPos.x) <= 0.5 &&
+              Math.abs(localPlayerPos.y) <= 0.5
+            ) {
+              isInsideAnyZone = true;
+              break;
+            }
+          }
+        }
+        if (isInsideAnyZone) {
+          playersToHighlight.add(player.playerData.id);
+        }
+      }
+    }
+    for (const player of playerManager.playerMap.values()) {
+      if (playersToHighlight.has(player.playerData.id)) {
+        if (!player.isHighlighted) player.showHighlight();
+      } else {
+        if (player.isHighlighted) player.hideHighlight();
+      }
+    }
 
     const followedPlayer = followedPlayerID
       ? playerManager.playerMap.get(followedPlayerID)
@@ -467,8 +494,6 @@ async function main() {
         const ball = playerManager.ball;
         if (ball) {
           camera.lookAt(ball.mesh.position);
-        } else {
-          // Fallback logic requires player.velocity
         }
       }
     } else {

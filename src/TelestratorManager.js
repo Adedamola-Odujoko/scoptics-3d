@@ -11,6 +11,8 @@ import {
   TorusGeometry,
   MeshBasicMaterial,
   ArcCurve,
+  PlaneGeometry,
+  CircleGeometry,
 } from "three";
 
 const Y_OFFSET = 0.02;
@@ -22,18 +24,14 @@ export class TelestratorManager {
     this.groundPlane = groundPlane;
     this.playerManager = playerManager;
     this.onDrawStart = onDrawStart;
-
     this.raycaster = new Raycaster();
     this.mouse = new Vector2();
-
     this.currentTool = "cursor";
     this.currentColor = "#ffff00";
     this.isDrawing = false;
-
     this.currentDrawing = null;
     this.annotations = new Group();
     this.scene.add(this.annotations);
-
     this.highlights = new Map();
   }
 
@@ -49,13 +47,16 @@ export class TelestratorManager {
     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     this.raycaster.setFromCamera(this.mouse, this.camera);
     const intersects = this.raycaster.intersectObject(this.groundPlane);
-
     if (intersects.length > 0) {
       const point = intersects[0].point;
       point.y += Y_OFFSET;
       return point;
     }
     return null;
+  }
+
+  getZones() {
+    return this.annotations.children.filter((child) => child.userData.isZone);
   }
 
   handleMouseDown(event) {
@@ -69,16 +70,13 @@ export class TelestratorManager {
         this.annotations.children,
         true
       );
-
       if (intersects.length > 0) {
         const objectToErase = intersects[0].object.parent.isGroup
           ? intersects[0].object.parent
           : intersects[0].object;
-
         if (objectToErase.userData.isHighlight) {
           this.highlights.delete(objectToErase.userData.playerId);
         }
-
         this.annotations.remove(objectToErase);
       }
       return;
@@ -88,24 +86,19 @@ export class TelestratorManager {
       this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
       this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
       this.raycaster.setFromCamera(this.mouse, this.camera);
-
       const playerMeshes = this.playerManager.getPlayerMeshes();
       const intersects = this.raycaster.intersectObjects(playerMeshes);
-
       if (intersects.length > 0) {
         const clickedPlayer = intersects[0].object.userData.player;
         const playerId = clickedPlayer.playerData.id;
-
         if (clickedPlayer && !this.highlights.has(playerId)) {
           if (this.onDrawStart) this.onDrawStart();
-
           const geometry = new TorusGeometry(0.7, 0.08, 16, 48);
           const material = new MeshBasicMaterial({ color: this.currentColor });
           const highlightMesh = new Mesh(geometry, material);
           highlightMesh.rotation.x = -Math.PI / 2;
           highlightMesh.userData.isHighlight = true;
           highlightMesh.userData.playerId = playerId;
-
           this.highlights.set(playerId, highlightMesh);
           this.annotations.add(highlightMesh);
         }
@@ -114,21 +107,49 @@ export class TelestratorManager {
     }
 
     if (this.currentTool === "cursor") return;
-
     const startPoint = this.getIntersectionPoint(event);
     if (!startPoint) return;
-
     if (this.onDrawStart) this.onDrawStart();
-
     this.isDrawing = true;
+
+    if (this.currentTool.startsWith("zone")) {
+      const zoneMaterial = new MeshBasicMaterial({
+        color: 0xff4136, // Red
+        opacity: 0.4,
+        transparent: true,
+      });
+      if (this.currentTool === "zone-box") {
+        const geometry = new PlaneGeometry(1, 1);
+        this.currentDrawing = new Mesh(geometry, zoneMaterial);
+        this.currentDrawing.rotation.x = -Math.PI / 2;
+        this.currentDrawing.position.copy(startPoint);
+        this.currentDrawing.userData = {
+          isZone: true,
+          type: "box",
+          startPoint,
+        };
+      } else if (this.currentTool === "zone-circle") {
+        const geometry = new CircleGeometry(1, 48);
+        this.currentDrawing = new Mesh(geometry, zoneMaterial);
+        this.currentDrawing.rotation.x = -Math.PI / 2;
+        this.currentDrawing.position.copy(startPoint);
+        this.currentDrawing.scale.set(0.01, 0.01, 0.01);
+        this.currentDrawing.userData = {
+          isZone: true,
+          type: "circle",
+          startPoint,
+        };
+      }
+      if (this.currentDrawing) this.annotations.add(this.currentDrawing);
+      return;
+    }
+
     this.currentDrawing = new Group();
     this.currentDrawing.userData.startPoint = startPoint;
-
     const material = new LineBasicMaterial({
       color: this.currentColor,
       linewidth: 3,
     });
-
     if (this.currentTool === "line" || this.currentTool === "arrow") {
       const geometry = new BufferGeometry().setFromPoints([
         startPoint.clone(),
@@ -136,7 +157,6 @@ export class TelestratorManager {
       ]);
       const line = new Line(geometry, material);
       this.currentDrawing.add(line);
-
       if (this.currentTool === "arrow") {
         const coneGeo = new ConeGeometry(0.3, 0.8, 16);
         const coneMat = new MeshBasicMaterial({ color: this.currentColor });
@@ -157,7 +177,6 @@ export class TelestratorManager {
       line.userData.points = points;
       this.currentDrawing.add(line);
     }
-
     if (this.currentDrawing) this.annotations.add(this.currentDrawing);
   }
 
@@ -165,8 +184,24 @@ export class TelestratorManager {
     if (!this.isDrawing || !this.currentDrawing) return;
     const movePoint = this.getIntersectionPoint(event);
     if (!movePoint) return;
-
     const startPoint = this.currentDrawing.userData.startPoint;
+
+    if (this.currentDrawing.userData.isZone) {
+      if (this.currentDrawing.userData.type === "box") {
+        const width = Math.abs(movePoint.x - startPoint.x);
+        const depth = Math.abs(movePoint.z - startPoint.z);
+        this.currentDrawing.scale.set(width, depth, 1);
+        this.currentDrawing.position.set(
+          (startPoint.x + movePoint.x) / 2,
+          Y_OFFSET,
+          (startPoint.z + movePoint.z) / 2
+        );
+      } else if (this.currentDrawing.userData.type === "circle") {
+        const radius = startPoint.distanceTo(movePoint);
+        this.currentDrawing.scale.set(radius, radius, radius);
+      }
+      return;
+    }
 
     if (this.currentTool === "line" || this.currentTool === "arrow") {
       const line = this.currentDrawing.children[0];
@@ -177,7 +212,6 @@ export class TelestratorManager {
         movePoint.z
       );
       line.geometry.attributes.position.needsUpdate = true;
-
       if (this.currentTool === "arrow") {
         const cone = this.currentDrawing.children[1];
         cone.position.copy(movePoint);
@@ -193,19 +227,9 @@ export class TelestratorManager {
       circle.scale.set(radius, radius, radius);
     } else if (this.currentTool === "freehand") {
       const line = this.currentDrawing.children[0];
-
-      // --- START: FIX FOR FREEHAND DRAWING ---
-
-      // 1. Add the new point to our array
       line.userData.points.push(movePoint);
-
-      // 2. Dispose of the old geometry to prevent memory leaks
       line.geometry.dispose();
-
-      // 3. Create a brand new geometry from the updated points array
       line.geometry = new BufferGeometry().setFromPoints(line.userData.points);
-
-      // --- END: FIX FOR FREEHAND DRAWING ---
     }
   }
 
@@ -232,7 +256,6 @@ export class TelestratorManager {
 
   update() {
     if (this.highlights.size === 0) return;
-
     for (const [playerId, highlightMesh] of this.highlights.entries()) {
       const player = this.playerManager.playerMap.get(playerId);
       if (player && player.mesh) {

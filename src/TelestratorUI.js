@@ -43,13 +43,27 @@ export function createTelestratorUI({
     return btn;
   };
 
+  const createSeparator = () => {
+    const sep = document.createElement("div");
+    sep.style.height = "1px";
+    sep.style.background = "#444";
+    sep.style.margin = "4px 0";
+    toolbar.appendChild(sep);
+  };
+
   // --- Create Tools ---
   const cursorBtn = createButton("cursor", "Cursor");
   createButton("line", "Line");
-  createButton("arrow", "Arrow"); // <-- NEW
-  createButton("circle", "Circle"); // <-- NEW
-  createButton("highlight", "Highlight"); // <-- NEW
+  createButton("arrow", "Arrow");
   createButton("freehand", "Draw");
+
+  // --- Zone Tools ---
+  createSeparator();
+  createButton("zone-box", "Zone (Box)");
+  createButton("zone-circle", "Zone (Circle)");
+  createSeparator();
+
+  createButton("highlight", "Highlight Player");
   createButton("erase", "Erase");
 
   // --- Create Actions ---
