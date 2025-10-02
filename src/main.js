@@ -391,6 +391,7 @@ async function main() {
     } else if (ev.key === "Escape" || ev.key === "3") {
       cameraMode = "orbit";
       followedPlayerID = null;
+      controls.enabled = true; // <-- FIX: Re-enable orbit controls
     }
     if (followedPlayerID) {
       if (ev.key === "1") cameraMode = "thirdPerson";
