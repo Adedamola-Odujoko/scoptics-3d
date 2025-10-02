@@ -121,6 +121,24 @@ export class Player {
     }
   }
 
+  // --- NEW: Method to clear the trail ---
+  clearTrackLine() {
+    if (!this.isBeingTracked || !this.trackLine) return;
+
+    // Reset stats and points
+    this.distanceCovered = 0;
+    this.trackPoints = [this.mesh.position.clone()];
+    this.lastPosition.copy(this.mesh.position);
+
+    // Update the visible line
+    this.trackLine.geometry.dispose();
+    this.trackLine.geometry = new BufferGeometry().setFromPoints(
+      this.trackPoints
+    );
+    this.trackLine.computeLineDistances();
+  }
+  // --- END NEW ---
+
   // Methods to control the highlight
   showHighlight() {
     if (!this.highlight) return;

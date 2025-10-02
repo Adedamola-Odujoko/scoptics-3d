@@ -352,6 +352,17 @@ export class TelestratorManager {
       player.stopTracking(this.scene);
     }
   }
+  // --- NEW: Method to clear just the trails ---
+  clearAllTrackLines() {
+    if (!this.isTrackMode) return;
+    for (const playerId of this.highlightedPlayerIds) {
+      const player = this.playerManager.playerMap.get(playerId);
+      if (player) {
+        player.clearTrackLine();
+      }
+    }
+  }
+  // --- END NEW ---
 
   updateConnectionShape() {
     if (this.connectionShape) {

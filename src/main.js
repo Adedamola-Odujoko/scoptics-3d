@@ -267,6 +267,7 @@ async function main() {
     onTrackToggle: (enabled) => {
       telestratorManager.setTrackMode(enabled);
     },
+    onClearTracks: () => telestratorManager.clearAllTrackLines(),
   });
 
   const buffer = new PlaybackBuffer();
