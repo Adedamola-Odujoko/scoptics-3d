@@ -3,6 +3,7 @@ export function createTelestratorUI({
   onColorSelect,
   onClear,
   onUndo,
+  onConnectToggle, // <-- NEW callback
 }) {
   const toolbar = document.createElement("div");
   toolbar.id = "telestrator-toolbar";
@@ -56,15 +57,31 @@ export function createTelestratorUI({
   createButton("line", "Line");
   createButton("arrow", "Arrow");
   createButton("freehand", "Draw");
-
-  // --- Zone Tools ---
   createSeparator();
   createButton("zone-box", "Zone (Box)");
   createButton("zone-circle", "Zone (Circle)");
   createSeparator();
-
   createButton("highlight", "Highlight Player");
   createButton("erase", "Erase");
+
+  // --- NEW: Connect Mode Checkbox ---
+  const connectContainer = document.createElement("label");
+  connectContainer.style.display = "flex";
+  connectContainer.style.alignItems = "center";
+  connectContainer.style.gap = "6px";
+  connectContainer.style.fontSize = "12px";
+  connectContainer.style.color = "#ddd";
+  connectContainer.style.padding = "4px";
+  connectContainer.style.cursor = "pointer";
+
+  const connectCheckbox = document.createElement("input");
+  connectCheckbox.type = "checkbox";
+  connectCheckbox.onchange = (e) => onConnectToggle(e.target.checked);
+
+  connectContainer.appendChild(connectCheckbox);
+  connectContainer.appendChild(document.createTextNode("Connect"));
+  toolbar.appendChild(connectContainer);
+  // --- END NEW ---
 
   // --- Create Actions ---
   const undoBtn = createButton("undo", "Undo Last", false);

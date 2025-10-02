@@ -17,6 +17,48 @@ import {
 
 const Y_OFFSET = 0.02;
 
+// --- NEW: Convex Hull Helper Function ---
+// Implements the Monotone Chain algorithm to find the convex hull of 2D points.
+function computeConvexHull2D(points) {
+  // We only care about x and z for the 2D plane
+  const pts = points
+    .map((p) => ({ x: p.x, z: p.z, original: p }))
+    .sort((a, b) => a.x - b.x || a.z - b.z);
+
+  const cross = (o, a, b) =>
+    (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+
+  const lower = [];
+  for (const p of pts) {
+    while (
+      lower.length >= 2 &&
+      cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0
+    ) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (
+      upper.length >= 2 &&
+      cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0
+    ) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+
+  // Combine and map back to original Vector3 points
+  return lower
+    .slice(0, -1)
+    .concat(upper.slice(0, -1))
+    .map((p) => p.original);
+}
+// --- END NEW ---
+
 export class TelestratorManager {
   constructor(scene, camera, groundPlane, playerManager, { onDrawStart }) {
     this.scene = scene;
@@ -32,7 +74,11 @@ export class TelestratorManager {
     this.currentDrawing = null;
     this.annotations = new Group();
     this.scene.add(this.annotations);
+
     this.highlights = new Map();
+    this.highlightedPlayerIds = new Set();
+    this.isConnectMode = false;
+    this.connectionShape = null;
   }
 
   setTool(tool) {
@@ -40,6 +86,10 @@ export class TelestratorManager {
   }
   setColor(color) {
     this.currentColor = color;
+  }
+  setConnectMode(enabled) {
+    this.isConnectMode = enabled;
+    this.updateConnectionShape();
   }
 
   getIntersectionPoint(event) {
@@ -74,8 +124,17 @@ export class TelestratorManager {
         const objectToErase = intersects[0].object.parent.isGroup
           ? intersects[0].object.parent
           : intersects[0].object;
+
         if (objectToErase.userData.isHighlight) {
-          this.highlights.delete(objectToErase.userData.playerId);
+          // This logic now just removes the visual ring, not the selection state
+          const playerIdToRemove = [...this.highlights.entries()].find(
+            ([id, mesh]) => mesh === objectToErase
+          )?.[0];
+          if (playerIdToRemove) {
+            this.highlights.delete(playerIdToRemove);
+            this.highlightedPlayerIds.delete(playerIdToRemove); // Also remove from selection
+            this.updateConnectionShape();
+          }
         }
         this.annotations.remove(objectToErase);
       }
@@ -91,17 +150,24 @@ export class TelestratorManager {
       if (intersects.length > 0) {
         const clickedPlayer = intersects[0].object.userData.player;
         const playerId = clickedPlayer.playerData.id;
-        if (clickedPlayer && !this.highlights.has(playerId)) {
-          if (this.onDrawStart) this.onDrawStart();
+        if (this.highlightedPlayerIds.has(playerId)) {
+          this.highlightedPlayerIds.delete(playerId);
+          const highlightMesh = this.highlights.get(playerId);
+          if (highlightMesh) {
+            this.annotations.remove(highlightMesh);
+            this.highlights.delete(playerId);
+          }
+        } else {
+          this.highlightedPlayerIds.add(playerId);
           const geometry = new TorusGeometry(0.7, 0.08, 16, 48);
           const material = new MeshBasicMaterial({ color: this.currentColor });
           const highlightMesh = new Mesh(geometry, material);
           highlightMesh.rotation.x = -Math.PI / 2;
           highlightMesh.userData.isHighlight = true;
-          highlightMesh.userData.playerId = playerId;
           this.highlights.set(playerId, highlightMesh);
           this.annotations.add(highlightMesh);
         }
+        this.updateConnectionShape();
       }
       return;
     }
@@ -114,7 +180,7 @@ export class TelestratorManager {
 
     if (this.currentTool.startsWith("zone")) {
       const zoneMaterial = new MeshBasicMaterial({
-        color: 0xff4136, // Red
+        color: 0xff4136,
         opacity: 0.4,
         transparent: true,
       });
@@ -243,7 +309,15 @@ export class TelestratorManager {
     if (children.length > 0) {
       const lastDrawing = children[children.length - 1];
       if (lastDrawing.userData.isHighlight) {
-        this.highlights.delete(lastDrawing.userData.playerId);
+        // Find which player this highlight belongs to and remove from selection
+        const playerIdToRemove = [...this.highlights.entries()].find(
+          ([id, mesh]) => mesh === lastDrawing
+        )?.[0];
+        if (playerIdToRemove) {
+          this.highlights.delete(playerIdToRemove);
+          this.highlightedPlayerIds.delete(playerIdToRemove);
+          this.updateConnectionShape();
+        }
       }
       this.annotations.remove(lastDrawing);
     }
@@ -252,10 +326,58 @@ export class TelestratorManager {
   clearAll() {
     this.annotations.clear();
     this.highlights.clear();
+    this.highlightedPlayerIds.clear();
+    this.updateConnectionShape();
+  }
+
+  // --- REWORKED CONNECTION LOGIC ---
+  updateConnectionShape() {
+    if (this.connectionShape) {
+      this.annotations.remove(this.connectionShape);
+      this.connectionShape.geometry.dispose();
+      if (this.connectionShape.material)
+        this.connectionShape.material.dispose();
+      this.connectionShape = null;
+    }
+
+    if (!this.isConnectMode || this.highlightedPlayerIds.size < 2) {
+      return;
+    }
+
+    const playerPositions = [];
+    for (const playerId of this.highlightedPlayerIds) {
+      const player = this.playerManager.playerMap.get(playerId);
+      if (player && player.mesh) {
+        playerPositions.push(player.mesh.position);
+      }
+    }
+
+    if (playerPositions.length < 2) return;
+
+    const material = new LineBasicMaterial({ color: 0xff4136, linewidth: 3 });
+    let shapePoints = [];
+
+    if (playerPositions.length === 2) {
+      shapePoints = playerPositions;
+    } else {
+      shapePoints = computeConvexHull2D(playerPositions);
+      // Close the loop
+      if (shapePoints.length > 0) {
+        shapePoints.push(shapePoints[0]);
+      }
+    }
+
+    if (shapePoints.length > 0) {
+      const geometry = new BufferGeometry().setFromPoints(shapePoints);
+      this.connectionShape = new Line(geometry, material);
+      this.connectionShape.userData.isConnectionShape = true;
+      this.connectionShape.position.y = Y_OFFSET + 0.01; // Avoid z-fighting
+      this.annotations.add(this.connectionShape);
+    }
   }
 
   update() {
-    if (this.highlights.size === 0) return;
+    // Update individual player highlight rings
     for (const [playerId, highlightMesh] of this.highlights.entries()) {
       const player = this.playerManager.playerMap.get(playerId);
       if (player && player.mesh) {
@@ -265,6 +387,37 @@ export class TelestratorManager {
         highlightMesh.visible = true;
       } else {
         highlightMesh.visible = false;
+      }
+    }
+
+    // Update the connection shape's vertices
+    if (this.connectionShape && this.isConnectMode) {
+      const livePositions = [];
+      for (const playerId of this.highlightedPlayerIds) {
+        const player = this.playerManager.playerMap.get(playerId);
+        if (player && player.mesh) {
+          livePositions.push(player.mesh.position);
+        }
+      }
+
+      if (livePositions.length < 2) {
+        this.updateConnectionShape(); // Remove shape if not enough players
+        return;
+      }
+
+      let newShapePoints = [];
+      if (livePositions.length === 2) {
+        newShapePoints = livePositions;
+      } else {
+        newShapePoints = computeConvexHull2D(livePositions);
+        if (newShapePoints.length > 0) newShapePoints.push(newShapePoints[0]);
+      }
+
+      if (newShapePoints.length > 0) {
+        this.connectionShape.geometry.dispose();
+        this.connectionShape.geometry = new BufferGeometry().setFromPoints(
+          newShapePoints
+        );
       }
     }
   }

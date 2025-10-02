@@ -253,6 +253,9 @@ async function main() {
     onColorSelect: (color) => telestratorManager.setColor(color),
     onClear: () => telestratorManager.clearAll(),
     onUndo: () => telestratorManager.undoLast(),
+    onConnectToggle: (enabled) => {
+      telestratorManager.setConnectMode(enabled);
+    },
   });
 
   const buffer = new PlaybackBuffer();
@@ -391,7 +394,7 @@ async function main() {
     } else if (ev.key === "Escape" || ev.key === "3") {
       cameraMode = "orbit";
       followedPlayerID = null;
-      controls.enabled = true; // <-- FIX: Re-enable orbit controls
+      controls.enabled = true;
     }
     if (followedPlayerID) {
       if (ev.key === "1") cameraMode = "thirdPerson";
