@@ -1,5 +1,3 @@
-// src/TelestratorUI.js (FINAL VERSION WITH UNDO/ERASE)
-
 export function createTelestratorUI({
   onToolSelect,
   onColorSelect,
@@ -45,27 +43,18 @@ export function createTelestratorUI({
     return btn;
   };
 
-  const createColorSwatch = (color) => {
-    const swatch = document.createElement("div");
-    swatch.style.width = "24px";
-    swatch.style.height = "24px";
-    swatch.style.background = color;
-    swatch.style.borderRadius = "50%";
-    swatch.style.border = "2px solid #fff";
-    swatch.style.cursor = "pointer";
-    swatch.onclick = () => onColorSelect(color);
-    toolbar.appendChild(swatch);
-  };
-
   // --- Create Tools ---
   const cursorBtn = createButton("cursor", "Cursor");
   createButton("line", "Line");
+  createButton("arrow", "Arrow"); // <-- NEW
+  createButton("circle", "Circle"); // <-- NEW
+  createButton("highlight", "Highlight"); // <-- NEW
   createButton("freehand", "Draw");
-  createButton("erase", "Erase"); // <-- NEW ERASE TOOL
+  createButton("erase", "Erase");
 
   // --- Create Actions ---
-  const undoBtn = createButton("undo", "Undo Last", false); // false = not a selectable tool
-  undoBtn.onclick = onUndo; // <-- NEW UNDO ACTION
+  const undoBtn = createButton("undo", "Undo Last", false);
+  undoBtn.onclick = onUndo;
 
   const clearBtn = createButton("clear", "Clear All", false);
   clearBtn.onclick = onClear;

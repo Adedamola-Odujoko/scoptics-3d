@@ -1,5 +1,3 @@
-// src/main.js (COMPLETE, FINAL CORRECTED INTERACTION VERSION)
-
 import {
   Scene,
   PerspectiveCamera,
@@ -24,6 +22,9 @@ import { teamColors } from "./skeleton.js";
 import { PlaybackBuffer } from "./PlaybackBuffer.js";
 import { createTelestratorUI } from "./TelestratorUI.js";
 import { TelestratorManager } from "./TelestratorManager.js";
+
+// The createControlsUI, formatTimeMsDiff, and createTimestampLocatorUI functions
+// remain EXACTLY THE SAME as in your original file.
 
 function createControlsUI() {
   const ctrl = document.createElement("div");
@@ -222,29 +223,6 @@ async function main() {
   initPitch(scene);
   scene.add(new GridHelper(120, 120, 0x444444, 0x222222));
 
-  const telestratorManager = new TelestratorManager(
-    scene,
-    camera,
-    groundPlane,
-    {
-      onDrawStart: () => {
-        if (isPlaying) {
-          isPlaying = false;
-          ui.playBtn.innerText = "Play ▶";
-        }
-      },
-    }
-  );
-  createTelestratorUI({
-    onToolSelect: (tool) => {
-      telestratorManager.setTool(tool);
-      controls.enabled = tool === "cursor";
-    },
-    onColorSelect: (color) => telestratorManager.setColor(color),
-    onClear: () => telestratorManager.clearAll(),
-    onUndo: () => telestratorManager.undoLast(),
-  });
-
   const homeTeamName = metadata.home_team.name;
   const awayTeamName = metadata.away_team.name;
   const teamColorMap = {
@@ -254,6 +232,32 @@ async function main() {
     Ball: teamColors.Ball,
   };
   const playerManager = new PlayerManager(scene, teamColorMap);
+
+  // --- UPDATED TelestratorManager INSTANTIATION ---
+  const telestratorManager = new TelestratorManager(
+    scene,
+    camera,
+    groundPlane,
+    playerManager, // <-- Pass the player manager
+    {
+      onDrawStart: () => {
+        if (isPlaying) {
+          isPlaying = false;
+          ui.playBtn.innerText = "Play ▶";
+        }
+      },
+    }
+  );
+
+  createTelestratorUI({
+    onToolSelect: (tool) => {
+      telestratorManager.setTool(tool);
+      controls.enabled = tool === "cursor";
+    },
+    onColorSelect: (color) => telestratorManager.setColor(color),
+    onClear: () => telestratorManager.clearAll(),
+    onUndo: () => telestratorManager.undoLast(),
+  });
 
   const buffer = new PlaybackBuffer();
   allFrames.forEach((frame) => {
@@ -280,6 +284,8 @@ async function main() {
   const mouse = new Vector2();
   const thirdPersonOffset = new Vector3(0, 4, -8);
   const cameraLookAt = new Vector3();
+
+  // ... All UI event listeners (handleGoToTimestamp, playbackRate, etc.) are the same
 
   const handleGoToTimestamp = () => {
     const timeStr = locatorUI.input.value;
@@ -379,6 +385,7 @@ async function main() {
     telestratorManager.handleMouseUp(event)
   );
 
+  // ... Keyboard event listeners are the same
   window.addEventListener("keydown", (ev) => {
     if (ev.code === "Space") {
       ev.preventDefault();
@@ -439,6 +446,9 @@ async function main() {
     }
 
     playerManager.smoothAll(0.15);
+
+    // --- NEW: Update Telestrator animations every frame ---
+    telestratorManager.update();
 
     const followedPlayer = followedPlayerID
       ? playerManager.playerMap.get(followedPlayerID)
