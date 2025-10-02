@@ -13,14 +13,15 @@ import {
   ArcCurve,
   PlaneGeometry,
   CircleGeometry,
+  Shape,
+  ShapeGeometry,
 } from "three";
 
 const Y_OFFSET = 0.02;
 
-// --- NEW: Convex Hull Helper Function ---
+// --- Convex Hull Helper Function ---
 // Implements the Monotone Chain algorithm to find the convex hull of 2D points.
 function computeConvexHull2D(points) {
-  // We only care about x and z for the 2D plane
   const pts = points
     .map((p) => ({ x: p.x, z: p.z, original: p }))
     .sort((a, b) => a.x - b.x || a.z - b.z);
@@ -51,13 +52,11 @@ function computeConvexHull2D(points) {
     upper.push(p);
   }
 
-  // Combine and map back to original Vector3 points
   return lower
     .slice(0, -1)
     .concat(upper.slice(0, -1))
     .map((p) => p.original);
 }
-// --- END NEW ---
 
 export class TelestratorManager {
   constructor(scene, camera, groundPlane, playerManager, { onDrawStart }) {
@@ -78,18 +77,32 @@ export class TelestratorManager {
     this.highlights = new Map();
     this.highlightedPlayerIds = new Set();
     this.isConnectMode = false;
+    this.isTrackMode = false;
     this.connectionShape = null;
   }
 
   setTool(tool) {
     this.currentTool = tool;
   }
+
   setColor(color) {
     this.currentColor = color;
   }
+
   setConnectMode(enabled) {
     this.isConnectMode = enabled;
     this.updateConnectionShape();
+  }
+
+  setTrackMode(enabled) {
+    this.isTrackMode = enabled;
+    for (const player of this.playerManager.playerMap.values()) {
+      if (this.highlightedPlayerIds.has(player.playerData.id) && enabled) {
+        player.startTracking(this.scene);
+      } else {
+        player.stopTracking(this.scene);
+      }
+    }
   }
 
   getIntersectionPoint(event) {
@@ -126,14 +139,15 @@ export class TelestratorManager {
           : intersects[0].object;
 
         if (objectToErase.userData.isHighlight) {
-          // This logic now just removes the visual ring, not the selection state
           const playerIdToRemove = [...this.highlights.entries()].find(
             ([id, mesh]) => mesh === objectToErase
           )?.[0];
           if (playerIdToRemove) {
             this.highlights.delete(playerIdToRemove);
-            this.highlightedPlayerIds.delete(playerIdToRemove); // Also remove from selection
+            this.highlightedPlayerIds.delete(playerIdToRemove);
             this.updateConnectionShape();
+            const player = this.playerManager.playerMap.get(playerIdToRemove);
+            if (player) player.stopTracking(this.scene);
           }
         }
         this.annotations.remove(objectToErase);
@@ -150,6 +164,7 @@ export class TelestratorManager {
       if (intersects.length > 0) {
         const clickedPlayer = intersects[0].object.userData.player;
         const playerId = clickedPlayer.playerData.id;
+
         if (this.highlightedPlayerIds.has(playerId)) {
           this.highlightedPlayerIds.delete(playerId);
           const highlightMesh = this.highlights.get(playerId);
@@ -157,6 +172,7 @@ export class TelestratorManager {
             this.annotations.remove(highlightMesh);
             this.highlights.delete(playerId);
           }
+          clickedPlayer.stopTracking(this.scene);
         } else {
           this.highlightedPlayerIds.add(playerId);
           const geometry = new TorusGeometry(0.7, 0.08, 16, 48);
@@ -166,6 +182,9 @@ export class TelestratorManager {
           highlightMesh.userData.isHighlight = true;
           this.highlights.set(playerId, highlightMesh);
           this.annotations.add(highlightMesh);
+          if (this.isTrackMode) {
+            clickedPlayer.startTracking(this.scene);
+          }
         }
         this.updateConnectionShape();
       }
@@ -309,7 +328,6 @@ export class TelestratorManager {
     if (children.length > 0) {
       const lastDrawing = children[children.length - 1];
       if (lastDrawing.userData.isHighlight) {
-        // Find which player this highlight belongs to and remove from selection
         const playerIdToRemove = [...this.highlights.entries()].find(
           ([id, mesh]) => mesh === lastDrawing
         )?.[0];
@@ -317,6 +335,8 @@ export class TelestratorManager {
           this.highlights.delete(playerIdToRemove);
           this.highlightedPlayerIds.delete(playerIdToRemove);
           this.updateConnectionShape();
+          const player = this.playerManager.playerMap.get(playerIdToRemove);
+          if (player) player.stopTracking(this.scene);
         }
       }
       this.annotations.remove(lastDrawing);
@@ -328,9 +348,11 @@ export class TelestratorManager {
     this.highlights.clear();
     this.highlightedPlayerIds.clear();
     this.updateConnectionShape();
+    for (const player of this.playerManager.playerMap.values()) {
+      player.stopTracking(this.scene);
+    }
   }
 
-  // --- REWORKED CONNECTION LOGIC ---
   updateConnectionShape() {
     if (this.connectionShape) {
       this.annotations.remove(this.connectionShape);
@@ -339,11 +361,9 @@ export class TelestratorManager {
         this.connectionShape.material.dispose();
       this.connectionShape = null;
     }
-
     if (!this.isConnectMode || this.highlightedPlayerIds.size < 2) {
       return;
     }
-
     const playerPositions = [];
     for (const playerId of this.highlightedPlayerIds) {
       const player = this.playerManager.playerMap.get(playerId);
@@ -351,33 +371,26 @@ export class TelestratorManager {
         playerPositions.push(player.mesh.position);
       }
     }
-
     if (playerPositions.length < 2) return;
 
     const material = new LineBasicMaterial({ color: 0xff4136, linewidth: 3 });
     let shapePoints = [];
-
     if (playerPositions.length === 2) {
       shapePoints = playerPositions;
     } else {
       shapePoints = computeConvexHull2D(playerPositions);
-      // Close the loop
-      if (shapePoints.length > 0) {
-        shapePoints.push(shapePoints[0]);
-      }
+      if (shapePoints.length > 0) shapePoints.push(shapePoints[0]);
     }
-
     if (shapePoints.length > 0) {
       const geometry = new BufferGeometry().setFromPoints(shapePoints);
       this.connectionShape = new Line(geometry, material);
       this.connectionShape.userData.isConnectionShape = true;
-      this.connectionShape.position.y = Y_OFFSET + 0.01; // Avoid z-fighting
+      this.connectionShape.position.y = Y_OFFSET + 0.01;
       this.annotations.add(this.connectionShape);
     }
   }
 
   update() {
-    // Update individual player highlight rings
     for (const [playerId, highlightMesh] of this.highlights.entries()) {
       const player = this.playerManager.playerMap.get(playerId);
       if (player && player.mesh) {
@@ -390,7 +403,6 @@ export class TelestratorManager {
       }
     }
 
-    // Update the connection shape's vertices
     if (this.connectionShape && this.isConnectMode) {
       const livePositions = [];
       for (const playerId of this.highlightedPlayerIds) {
@@ -399,12 +411,10 @@ export class TelestratorManager {
           livePositions.push(player.mesh.position);
         }
       }
-
       if (livePositions.length < 2) {
-        this.updateConnectionShape(); // Remove shape if not enough players
+        this.updateConnectionShape();
         return;
       }
-
       let newShapePoints = [];
       if (livePositions.length === 2) {
         newShapePoints = livePositions;
@@ -412,7 +422,6 @@ export class TelestratorManager {
         newShapePoints = computeConvexHull2D(livePositions);
         if (newShapePoints.length > 0) newShapePoints.push(newShapePoints[0]);
       }
-
       if (newShapePoints.length > 0) {
         this.connectionShape.geometry.dispose();
         this.connectionShape.geometry = new BufferGeometry().setFromPoints(

@@ -3,7 +3,8 @@ export function createTelestratorUI({
   onColorSelect,
   onClear,
   onUndo,
-  onConnectToggle, // <-- NEW callback
+  onConnectToggle,
+  onTrackToggle, // <-- NEW callback
 }) {
   const toolbar = document.createElement("div");
   toolbar.id = "telestrator-toolbar";
@@ -39,7 +40,6 @@ export function createTelestratorUI({
         onToolSelect(id);
       };
     }
-
     toolbar.appendChild(btn);
     return btn;
   };
@@ -50,6 +50,26 @@ export function createTelestratorUI({
     sep.style.background = "#444";
     sep.style.margin = "4px 0";
     toolbar.appendChild(sep);
+  };
+
+  const createCheckbox = (text, onChangeCallback) => {
+    const container = document.createElement("label");
+    container.style.display = "flex";
+    container.style.alignItems = "center";
+    container.style.gap = "6px";
+    container.style.fontSize = "12px";
+    container.style.color = "#ddd";
+    container.style.padding = "4px";
+    container.style.cursor = "pointer";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.onchange = (e) => onChangeCallback(e.target.checked);
+
+    container.appendChild(checkbox);
+    container.appendChild(document.createTextNode(text));
+    toolbar.appendChild(container);
+    return checkbox;
   };
 
   // --- Create Tools ---
@@ -63,30 +83,16 @@ export function createTelestratorUI({
   createSeparator();
   createButton("highlight", "Highlight Player");
   createButton("erase", "Erase");
+  createSeparator();
 
-  // --- NEW: Connect Mode Checkbox ---
-  const connectContainer = document.createElement("label");
-  connectContainer.style.display = "flex";
-  connectContainer.style.alignItems = "center";
-  connectContainer.style.gap = "6px";
-  connectContainer.style.fontSize = "12px";
-  connectContainer.style.color = "#ddd";
-  connectContainer.style.padding = "4px";
-  connectContainer.style.cursor = "pointer";
-
-  const connectCheckbox = document.createElement("input");
-  connectCheckbox.type = "checkbox";
-  connectCheckbox.onchange = (e) => onConnectToggle(e.target.checked);
-
-  connectContainer.appendChild(connectCheckbox);
-  connectContainer.appendChild(document.createTextNode("Connect"));
-  toolbar.appendChild(connectContainer);
-  // --- END NEW ---
+  // --- Modes ---
+  createCheckbox("Connect", onConnectToggle);
+  createCheckbox("Track", onTrackToggle); // <-- NEW
 
   // --- Create Actions ---
+  createSeparator();
   const undoBtn = createButton("undo", "Undo Last", false);
   undoBtn.onclick = onUndo;
-
   const clearBtn = createButton("clear", "Clear All", false);
   clearBtn.onclick = onClear;
 

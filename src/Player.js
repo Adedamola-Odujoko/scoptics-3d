@@ -6,15 +6,28 @@ import {
   Color,
   ConeGeometry,
   MeshBasicMaterial,
+  Line,
+  BufferGeometry,
+  LineDashedMaterial,
 } from "three";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+
+const MIN_TRACK_DISTANCE = 0.5; // meters
 
 export class Player {
   constructor(scene, playerData, initialColor, playerManager) {
     this.playerData = playerData;
     this.playerManager = playerManager;
-    this.isHighlighted = false; // State for highlighting
+    this.isHighlighted = false;
+
+    // --- NEW: Tracking properties ---
+    this.isBeingTracked = false;
+    this.trackPoints = [];
+    this.trackLine = null;
+    this.distanceCovered = 0; // in meters
+    this.currentSpeed = 0; // in m/s
+    this.lastPosition = new Vector3();
 
     const playerMaterial = new MeshStandardMaterial({
       color: initialColor,
@@ -77,6 +90,36 @@ export class Player {
     this.currentColor = initialColor;
     this.velocity = new Vector3();
   }
+  startTracking(scene) {
+    if (this.isBeingTracked || this.playerData.name === "Ball") return;
+    this.isBeingTracked = true;
+    this.distanceCovered = 0;
+    this.trackPoints = [this.mesh.position.clone()];
+    this.lastPosition.copy(this.mesh.position);
+
+    const material = new LineDashedMaterial({
+      color: 0xaaaaaa, // gray
+      linewidth: 1,
+      scale: 1,
+      dashSize: 0.5,
+      gapSize: 0.5,
+    });
+    const geometry = new BufferGeometry().setFromPoints(this.trackPoints);
+    this.trackLine = new Line(geometry, material);
+    scene.add(this.trackLine);
+  }
+
+  stopTracking(scene) {
+    if (!this.isBeingTracked) return;
+    this.isBeingTracked = false;
+    this.currentSpeed = 0;
+    if (this.trackLine) {
+      scene.remove(this.trackLine);
+      this.trackLine.geometry.dispose();
+      this.trackLine.material.dispose();
+      this.trackLine = null;
+    }
+  }
 
   // Methods to control the highlight
   showHighlight() {
@@ -104,9 +147,36 @@ export class Player {
     }
   }
 
-  smooth(alpha) {
+  smooth(alpha, dt) {
+    // <-- dt (delta time in ms) is now passed in
+    const prevPos = this.mesh.position.clone();
     this.velocity.copy(this.targetRoot).sub(this.mesh.position);
     this.mesh.position.lerp(this.targetRoot, alpha);
+
+    // --- NEW: Update tracking data ---
+    if (this.isBeingTracked && this.trackLine) {
+      const distSinceLastPoint = this.mesh.position.distanceTo(
+        this.lastPosition
+      );
+
+      if (distSinceLastPoint > MIN_TRACK_DISTANCE) {
+        this.trackPoints.push(this.mesh.position.clone());
+        this.lastPosition.copy(this.mesh.position);
+
+        this.trackLine.geometry.dispose();
+        this.trackLine.geometry = new BufferGeometry().setFromPoints(
+          this.trackPoints
+        );
+        this.trackLine.computeLineDistances(); // Required for dashed lines
+      }
+
+      const distThisFrame = this.mesh.position.distanceTo(prevPos);
+      this.distanceCovered += distThisFrame;
+
+      if (dt > 0) {
+        this.currentSpeed = distThisFrame / (dt / 1000); // meters per second
+      }
+    }
 
     // Animate the highlight if it's visible
     if (this.isHighlighted) {

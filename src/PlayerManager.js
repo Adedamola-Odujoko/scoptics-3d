@@ -68,9 +68,9 @@ export class PlayerManager {
     }
   }
 
-  smoothAll(alpha) {
+  smoothAll(alpha, dt) {
     for (const player of this.playerMap.values()) {
-      player.smooth(alpha);
+      player.smooth(alpha, dt);
     }
   }
 

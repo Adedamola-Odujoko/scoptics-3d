@@ -22,6 +22,7 @@ import { teamColors } from "./skeleton.js";
 import { PlaybackBuffer } from "./PlaybackBuffer.js";
 import { createTelestratorUI } from "./TelestratorUI.js";
 import { TelestratorManager } from "./TelestratorManager.js";
+import { createStatsUI, updateStats } from "./statsUI.js";
 
 function createControlsUI() {
   const ctrl = document.createElement("div");
@@ -245,16 +246,26 @@ async function main() {
     }
   );
 
+  const statsContainer = createStatsUI();
+
   createTelestratorUI({
     onToolSelect: (tool) => {
       telestratorManager.setTool(tool);
       controls.enabled = tool === "cursor";
     },
     onColorSelect: (color) => telestratorManager.setColor(color),
-    onClear: () => telestratorManager.clearAll(),
+    onClear: () => {
+      telestratorManager.clearAll();
+      document
+        .querySelectorAll('#telestrator-toolbar input[type="checkbox"]')
+        .forEach((cb) => (cb.checked = false));
+    },
     onUndo: () => telestratorManager.undoLast(),
     onConnectToggle: (enabled) => {
       telestratorManager.setConnectMode(enabled);
+    },
+    onTrackToggle: (enabled) => {
+      telestratorManager.setTrackMode(enabled);
     },
   });
 
@@ -440,7 +451,7 @@ async function main() {
       }
       playerManager.updateWithInterpolation(prev, next, interpAlpha);
     }
-    playerManager.smoothAll(0.15);
+    playerManager.smoothAll(0.15, dt);
     telestratorManager.update();
 
     const zones = telestratorManager.getZones();
@@ -481,6 +492,23 @@ async function main() {
       }
     }
 
+    if (telestratorManager.isTrackMode) {
+      const trackedPlayersData = [];
+      for (const playerId of telestratorManager.highlightedPlayerIds) {
+        const player = playerManager.playerMap.get(playerId);
+        if (player && player.isBeingTracked) {
+          trackedPlayersData.push({
+            name: player.playerData.name,
+            distance: player.distanceCovered,
+            speed: player.currentSpeed,
+          });
+        }
+      }
+      updateStats(statsContainer, trackedPlayersData);
+    } else {
+      updateStats(statsContainer, []);
+    }
+
     const followedPlayer = followedPlayerID
       ? playerManager.playerMap.get(followedPlayerID)
       : null;
@@ -496,9 +524,7 @@ async function main() {
         camera.position.copy(followedPlayer.mesh.position);
         camera.position.y += 1.6;
         const ball = playerManager.ball;
-        if (ball) {
-          camera.lookAt(ball.mesh.position);
-        }
+        if (ball) camera.lookAt(ball.mesh.position);
       }
     } else {
       if (followedPlayerID) {
