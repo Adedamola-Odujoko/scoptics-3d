@@ -22,7 +22,7 @@ import { teamColors } from "./skeleton.js";
 import { PlaybackBuffer } from "./PlaybackBuffer.js";
 import { createTelestratorUI } from "./TelestratorUI.js";
 import { TelestratorManager } from "./TelestratorManager.js";
-import { createStatsUI, updateStats } from "./statsUI.js";
+import { createStatsUI, updateStats } from "./StatsUI.js";
 
 function createControlsUI() {
   const ctrl = document.createElement("div");
@@ -261,13 +261,10 @@ async function main() {
         .forEach((cb) => (cb.checked = false));
     },
     onUndo: () => telestratorManager.undoLast(),
-    onConnectToggle: (enabled) => {
-      telestratorManager.setConnectMode(enabled);
-    },
-    onTrackToggle: (enabled) => {
-      telestratorManager.setTrackMode(enabled);
-    },
+    onConnectToggle: (enabled) => telestratorManager.setConnectMode(enabled),
+    onTrackToggle: (enabled) => telestratorManager.setTrackMode(enabled),
     onClearTracks: () => telestratorManager.clearAllTrackLines(),
+    onXgToggle: (enabled) => telestratorManager.setXgMode(enabled),
   });
 
   const buffer = new PlaybackBuffer();
@@ -454,6 +451,8 @@ async function main() {
     }
     playerManager.smoothAll(0.15, dt);
     telestratorManager.update();
+    telestratorManager.updatePassingLanes();
+    telestratorManager.updateXgVisualizer();
 
     const zones = telestratorManager.getZones();
     const playersToHighlight = new Set();

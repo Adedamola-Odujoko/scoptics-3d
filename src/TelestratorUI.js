@@ -5,7 +5,8 @@ export function createTelestratorUI({
   onUndo,
   onConnectToggle,
   onTrackToggle,
-  onClearTracks, // <-- NEW callback
+  onClearTracks,
+  onXgToggle,
 }) {
   const toolbar = document.createElement("div");
   toolbar.id = "telestrator-toolbar";
@@ -41,6 +42,7 @@ export function createTelestratorUI({
         onToolSelect(id);
       };
     }
+
     toolbar.appendChild(btn);
     return btn;
   };
@@ -83,24 +85,23 @@ export function createTelestratorUI({
   createButton("zone-circle", "Zone (Circle)");
   createSeparator();
   createButton("highlight", "Highlight Player");
+  createButton("passing-lane", "Passing Lane"); // <-- NEW TOOL
   createButton("erase", "Erase");
   createSeparator();
 
   // --- Modes ---
   createCheckbox("Connect", onConnectToggle);
-  createCheckbox("Track", onTrackToggle); // <-- NEW
+  createCheckbox("Track", onTrackToggle);
+  createCheckbox("View xG", onXgToggle);
+  createSeparator();
 
   // --- Create Actions ---
-  createSeparator();
   const undoBtn = createButton("undo", "Undo Last", false);
   undoBtn.onclick = onUndo;
-  const clearBtn = createButton("clear", "Clear All", false);
-  clearBtn.onclick = onClear;
-
-  // --- NEW: Clear Trails Button ---
   const clearTracksBtn = createButton("clear-tracks", "Clear Trails", false);
   clearTracksBtn.onclick = onClearTracks;
-  // --- END NEW ---
+  const clearBtn = createButton("clear", "Clear All", false);
+  clearBtn.onclick = onClear;
 
   // --- Create Colors ---
   const colorSection = document.createElement("div");

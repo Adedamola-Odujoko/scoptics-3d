@@ -29,6 +29,8 @@ export class Player {
     this.currentSpeed = 0; // in m/s
     this.lastPosition = new Vector3();
 
+    this.isInterceptor = false;
+
     const playerMaterial = new MeshStandardMaterial({
       color: initialColor,
       metalness: 0.2,
@@ -81,6 +83,18 @@ export class Player {
       this.highlight.position.y = height + 0.8; // Position it above the player
       this.highlight.visible = false; // Hidden by default
       this.mesh.add(this.highlight);
+
+      const interceptGeo = new ConeGeometry(0.5, 0.6, 16);
+      const interceptMat = new MeshBasicMaterial({
+        color: 0xff4136,
+        transparent: true,
+        opacity: 0.85,
+      }); // Red
+      this.interceptionHighlight = new Mesh(interceptGeo, interceptMat);
+      this.interceptionHighlight.position.y = height + 0.7; // Slightly lower to coexist
+      this.interceptionHighlight.visible = false;
+      this.mesh.add(this.interceptionHighlight);
+      // --- END NEW ---
     }
 
     this.mesh.userData.player = this;
@@ -90,6 +104,20 @@ export class Player {
     this.currentColor = initialColor;
     this.velocity = new Vector3();
   }
+
+  // --- NEW: Methods for Interceptor Highlight ---
+  showInterceptorHighlight() {
+    if (!this.interceptionHighlight) return;
+    this.isInterceptor = true;
+    this.interceptionHighlight.visible = true;
+  }
+
+  hideInterceptorHighlight() {
+    if (!this.interceptionHighlight) return;
+    this.isInterceptor = false;
+    this.interceptionHighlight.visible = false;
+  }
+  // --- END NEW ---
   startTracking(scene) {
     if (this.isBeingTracked || this.playerData.name === "Ball") return;
     this.isBeingTracked = true;
@@ -201,6 +229,10 @@ export class Player {
       this.highlight.rotation.y += 0.03;
     }
 
+    if (this.isInterceptor) {
+      this.interceptionHighlight.rotation.y -= 0.05; // Rotate other way for fun
+    }
+
     if (this.playerData.name !== "Ball" && this.playerManager.ball) {
       const ballPosition = this.playerManager.ball.mesh.position.clone();
       ballPosition.y = this.mesh.position.y;
@@ -217,6 +249,12 @@ export class Player {
       this.highlight.geometry.dispose();
       this.highlight.material.dispose();
     }
+
+    if (this.interceptionHighlight) {
+      this.interceptionHighlight.geometry.dispose();
+      this.interceptionHighlight.material.dispose();
+    }
+
     scene.remove(this.mesh);
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
