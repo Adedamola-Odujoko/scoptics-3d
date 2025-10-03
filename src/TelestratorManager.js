@@ -570,8 +570,10 @@ export class TelestratorManager {
     if (!this.isXgMode) {
       return;
     }
+
     const shooterId = [...this.highlightedPlayerIds].pop();
     const shooterPlayer = this.playerManager.playerMap.get(shooterId);
+
     if (!shooterPlayer) {
       this.xgVisualizer.setVisible(false);
       this.previousPressuringDefenders.forEach((p) =>
@@ -584,18 +586,14 @@ export class TelestratorManager {
     const shooterPos_scene = shooterPlayer.mesh.position;
     const shooterTeam = shooterPlayer.playerData.team;
 
+    const goalX_scene =
+      shooterPos_scene.x > 0 ? -this.pitchLength / 2 : this.pitchLength / 2;
+    const goalX_calc = -goalX_scene;
     const calcShooterPos = {
       x: -shooterPos_scene.x,
       y: shooterPos_scene.y,
       z: shooterPos_scene.z,
     };
-
-    // THE FIX: Determine the goal for calculation from un-flipped data. This is the source of truth.
-    const goalX_calc =
-      calcShooterPos.x > 0 ? this.pitchLength / 2 : -this.pitchLength / 2;
-
-    // The visualization goal is simply the opposite of the calculation goal.
-    const goalX_scene = -goalX_calc;
 
     const allOpponents = [];
     let goalkeeper_calc = null;
@@ -624,6 +622,7 @@ export class TelestratorManager {
       y: p.mesh.position.y,
       z: p.mesh.position.z,
     }));
+
     const xgValue = calculateXg(
       calcShooterPos,
       calcOpponentPositions,
@@ -640,6 +639,7 @@ export class TelestratorManager {
     );
     const leftPost2D_scene = new Vector2(goalX_scene, GOAL_WIDTH / 2);
     const rightPost2D_scene = new Vector2(goalX_scene, -GOAL_WIDTH / 2);
+
     for (const opponent of allOpponents) {
       const defenderPos2D_scene = new Vector2(
         opponent.mesh.position.x,
