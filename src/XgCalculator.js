@@ -77,5 +77,5 @@ export function calculateXg(
   const z = -1.5 + 1.2 * angle + -0.08 * distance + -0.3 * pressure + gkFactor;
   const xg = 1 / (1 + Math.exp(-z));
 
-  return Math.round(xg * 1000) / 1000; // Round to 3 decimal places
+  return Math.round(xg * 1000) / 100; // Round to 3 decimal places
 }

@@ -23,6 +23,7 @@ import { PlaybackBuffer } from "./PlaybackBuffer.js";
 import { createTelestratorUI } from "./TelestratorUI.js";
 import { TelestratorManager } from "./TelestratorManager.js";
 import { createStatsUI, updateStats } from "./StatsUI.js";
+import { HandController } from "./handController.js";
 
 function createControlsUI() {
   const ctrl = document.createElement("div");
@@ -109,7 +110,6 @@ function createControlsUI() {
     timeLabel,
   };
 }
-
 function formatTimeMsDiff(msDiff) {
   const total = Math.max(0, Math.floor(msDiff / 1000));
   const mm = Math.floor(total / 60)
@@ -120,7 +120,6 @@ function formatTimeMsDiff(msDiff) {
     .padStart(2, "0");
   return `${mm}:${ss}`;
 }
-
 function createTimestampLocatorUI() {
   const locator = document.createElement("div");
   locator.id = "timestamp-locator";
@@ -212,6 +211,42 @@ async function main() {
   scene.add(dirLight);
   const controls = new OrbitControls(camera, renderer.domElement);
 
+  const videoEl = document.createElement("video");
+  videoEl.autoplay = true;
+  videoEl.playsInline = true;
+  // --- FIX 1: Mute the video to allow autoplay ---
+  videoEl.muted = true;
+  videoEl.style.display = "none";
+  document.body.appendChild(videoEl);
+
+  const handController = new HandController(videoEl, controls);
+
+  async function startHandTracking() {
+    try {
+      console.log("Attempting to start hand tracking automatically...");
+      await handController.init();
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+        videoEl.srcObject = stream;
+        videoEl.addEventListener("loadeddata", () => {
+          // --- FIX 2: Explicitly play the video ---
+          videoEl.play();
+          console.log("✅ Hand tracking is active.");
+          handController.predictWebcam();
+        });
+      }
+    } catch (error) {
+      console.warn(
+        "Hand tracking could not be started. Using mouse controls only.",
+        error
+      );
+    }
+  }
+
+  startHandTracking();
+
   const groundGeometry = new PlaneGeometry(200, 200);
   const groundMaterial = new MeshBasicMaterial({ visible: false });
   const groundPlane = new Mesh(groundGeometry, groundMaterial);
@@ -229,13 +264,14 @@ async function main() {
     Referee: teamColors.Referee,
     Ball: teamColors.Ball,
   };
-  const playerManager = new PlayerManager(scene, teamColorMap);
+  const playerManager = new PlayerManager(scene, teamColorMap, metadata);
 
   const telestratorManager = new TelestratorManager(
     scene,
     camera,
     groundPlane,
     playerManager,
+    labelRenderer,
     {
       onDrawStart: () => {
         if (isPlaying) {
@@ -249,19 +285,22 @@ async function main() {
   const statsContainer = createStatsUI();
 
   createTelestratorUI({
+    homeTeamName: metadata.home_team.short_name,
+    awayTeamName: metadata.away_team.short_name,
     onToolSelect: (tool) => {
       telestratorManager.setTool(tool);
-      controls.enabled = tool === "cursor";
+      if (tool === "cursor") controls.enabled = true;
     },
     onColorSelect: (color) => telestratorManager.setColor(color),
     onClear: () => {
       telestratorManager.clearAll();
-      document
-        .querySelectorAll('#telestrator-toolbar input[type="checkbox"]')
-        .forEach((cb) => (cb.checked = false));
+      document.getElementById("tool-cursor").click();
     },
     onUndo: () => telestratorManager.undoLast(),
-    onConnectToggle: (enabled) => telestratorManager.setConnectMode(enabled),
+    onFormationToolUpdate: (team, tool, isEnabled) => {
+      telestratorManager.updateFormationTool(team, tool, isEnabled);
+      controls.enabled = false;
+    },
     onTrackToggle: (enabled) => telestratorManager.setTrackMode(enabled),
     onClearTracks: () => telestratorManager.clearAllTrackLines(),
     onXgToggle: (enabled) => telestratorManager.setXgMode(enabled),
@@ -450,6 +489,9 @@ async function main() {
       playerManager.updateWithInterpolation(prev, next, interpAlpha);
     }
     playerManager.smoothAll(0.15, dt);
+
+    handController.update(0.15);
+
     telestratorManager.update();
     telestratorManager.updatePassingLanes();
     telestratorManager.updateXgVisualizer();

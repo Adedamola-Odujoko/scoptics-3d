@@ -1,4 +1,4 @@
-// src/MatchDataLoader.js (FINAL CORRECTED-AXIS VERSION)
+// src/MatchDataLoader.js
 
 export class MatchDataLoader {
   constructor(metadataUrl, trackingDataUrl) {
@@ -49,6 +49,9 @@ export class MatchDataLoader {
         name: p.last_name || "Player",
         number: p.number,
         team: p.team_id === homeTeamId ? homeTeamName : awayTeamName,
+        // --- NEW ---
+        // Store the player's role acronym (e.g., 'LCB', 'CM', 'CF')
+        role: p.player_role ? p.player_role.acronym : "UNKNOWN",
       });
     });
 
@@ -57,6 +60,7 @@ export class MatchDataLoader {
         id: `R${r.id}`,
         name: r.last_name || "Referee",
         team: "Referee",
+        role: "REF",
       });
     });
 
@@ -64,6 +68,7 @@ export class MatchDataLoader {
       id: "Ball",
       name: "Ball",
       team: "Ball",
+      role: "BALL",
     });
   }
 
@@ -83,10 +88,9 @@ export class MatchDataLoader {
             id: entityInfo.id,
             name: entityInfo.name,
             team: entityInfo.team,
-            // --- THIS IS THE FIX ---
-            // We multiply the incoming x-coordinate by -1 to flip the axis.
+            role: entityInfo.role, // <-- Pass the role into frame data
             x: -trackedObj.x * 100,
-            y: --trackedObj.y * 100,
+            y: trackedObj.y * 100, // Corrected y-axis
           });
         }
       }

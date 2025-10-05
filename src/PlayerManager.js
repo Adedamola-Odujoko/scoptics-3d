@@ -1,4 +1,4 @@
-// src/PlayerManager.js (REVERTED to stable grace period)
+// FILE: src/PlayerManager.js
 
 import { Player } from "./Player.js";
 import { teamColors } from "./skeleton.js";
@@ -7,11 +7,21 @@ import { Vector3 } from "three";
 const GRACE_PERIOD_MS = 6000;
 const interpolatedPosition = new Vector3();
 
+// Define which role acronyms belong to which group
+const ROLE_GROUPS = {
+  // NEW: "backline" for defenders only, excluding the GK.
+  backline: ["LCB", "RCB", "CB", "LWB", "RWB", "LB", "RB"],
+  midfield: ["CM", "LM", "RM", "CDM", "CAM", "DM", "AM"],
+  attack: ["LW", "RW", "CF", "ST"],
+  spine: ["GK", "LCB", "RCB", "CB", "CM", "CDM", "CAM", "DM", "AM", "CF", "ST"],
+};
+
 export class PlayerManager {
-  constructor(scene, teamColorMap) {
+  constructor(scene, teamColorMap, metadata) {
     this.scene = scene;
     this.playerMap = new Map();
     this.teamColorMap = teamColorMap || {};
+    this.metadata = metadata;
     this.lastSeen = new Map();
     this.ball = null;
   }
@@ -23,10 +33,9 @@ export class PlayerManager {
     const prevPlayerMap = new Map(prevFrame.players.map((p) => [p.id, p]));
     const now = performance.now();
 
-    // --- (Phase 1) Update players that have fresh data ---
     for (const nextPlayerData of activePlayerDataSet) {
       const id = nextPlayerData.id;
-      this.lastSeen.set(id, now); // Update their timestamp
+      this.lastSeen.set(id, now);
 
       const prevPlayerData = prevPlayerMap.get(id);
       const color =
@@ -54,9 +63,6 @@ export class PlayerManager {
       player.updateTarget(interpolatedPosition, color);
     }
 
-    // --- (Phase 2) Remove players whose grace period has expired ---
-    // Note: We no longer have a phase for extrapolation. Players not in the
-    // activePlayerDataSet are simply not updated, so they will freeze.
     for (const [id, player] of this.playerMap.entries()) {
       const lastSeenTime = this.lastSeen.get(id);
       if (now - lastSeenTime > GRACE_PERIOD_MS) {
@@ -66,6 +72,36 @@ export class PlayerManager {
         this.lastSeen.delete(id);
       }
     }
+  }
+
+  getPlayersByGroup(teamName, group) {
+    const roles = ROLE_GROUPS[group];
+    if (!roles) return [];
+
+    const players = [];
+    for (const player of this.playerMap.values()) {
+      if (
+        player.playerData.team === teamName &&
+        roles.includes(player.playerData.role)
+      ) {
+        players.push(player);
+      }
+    }
+    return players;
+  }
+
+  getAllTeamPlayers(teamName) {
+    const players = [];
+    for (const player of this.playerMap.values()) {
+      if (
+        player.playerData.team === teamName &&
+        player.playerData.role !== "BALL" &&
+        player.playerData.role !== "REF"
+      ) {
+        players.push(player);
+      }
+    }
+    return players;
   }
 
   smoothAll(alpha, dt) {

@@ -1,19 +1,12 @@
-// FILE: src/handController.js (Final Corrected Reset Logic)
-
 import { HandLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import { Vector2, Vector3 } from "three";
 
-const PINCH_THRESHOLD = 0.06;
-
-// --- THIS IS THE DEFINITIVE FIX ---
-// Based on your logs (which showed values around 0.2), we set the
-// threshold to a value that will correctly capture the gesture.
+const PINCH_THRESHOLD = 0.04;
 const FIST_THRESHOLD = 0.2;
 
-// --- SENSITIVITY TUNING (Unchanged from your code) ---
 const PAN_SENSITIVITY = 5.0;
 const ZOOM_SENSITIVITY = 1.0;
-const ORBIT_SENSITIVITY = 6.5;
+const ORBIT_SENSITIVITY = 3.5;
 const GESTURE_MODE_THRESHOLD = 2.5;
 
 export class HandController {
@@ -30,7 +23,6 @@ export class HandController {
     this.lastPinchDistXY = 0;
     this.lastPinchDistZ = 0;
     this.lastMidPointY = 0;
-    this.lastHandDist = 1.0;
     this.panDelta = new Vector3();
     this.orbitDelta = { x: 0, y: 0 };
   }
@@ -49,21 +41,7 @@ export class HandController {
       numHands: 2,
     });
     console.log("✅ Hand Landmarker initialized.");
-    // this.controls.saveState();
-    // this.startWebcam();
   }
-
-  //   startWebcam() {
-  //     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-  //       navigator.mediaDevices.getUserMedia({ video: true }).then((stream) => {
-  //         //this.video.srcObject = stream;
-  //         this.video.addEventListener("loadeddata", () => {
-  //           console.log("Webcam started.");
-  //           this.predictWebcam();
-  //         });
-  //       });
-  //     }
-  //   }
 
   update(alpha) {
     const camera = this.controls.object;
@@ -107,27 +85,50 @@ export class HandController {
         this.video,
         Date.now()
       );
+      const wasGesturing = this.isPanning || this.isMultiHandGesture;
+
       if (results.landmarks && results.landmarks.length > 0) {
-        this.processGestures(results.landmarks);
+        // --- CHANGE 1: Pass handedness data ---
+        this.processGestures(results.landmarks, results.handedness);
       } else {
         this.isPanning = this.isMultiHandGesture = false;
       }
       this.lastVideoTime = this.video.currentTime;
+
+      const isGesturing = this.isPanning || this.isMultiHandGesture;
+
+      if (isGesturing && !wasGesturing) {
+        this.controls.enabled = false;
+      } else if (!isGesturing && wasGesturing) {
+        this.controls.enabled = true;
+      }
     }
     window.requestAnimationFrame(() => this.predictWebcam());
   }
 
-  processGestures(landmarks) {
+  // --- CHANGE 2: Accept 'handedness' as an argument ---
+  processGestures(landmarks, handedness) {
+    // --- CHANGE 3: Check for left-hand fist first ---
+    // Iterate through each detected hand
+    for (let i = 0; i < landmarks.length; i++) {
+      const handLandmarks = landmarks[i];
+      // The handedness array from MediaPipe contains an object with the categoryName
+      const handLabel = handedness[i][0].categoryName;
+      const handData = this.getHandData(handLandmarks);
+
+      // If the hand is a fist AND it's the 'Left' hand, then reset.
+      if (handData.isFist && handLabel === "Left") {
+        console.log("LEFT hand fist detected! Resetting camera.");
+        this.controls.reset();
+        this.isPanning = this.isMultiHandGesture = false;
+        return; // Exit the function early to prevent other gestures
+      }
+    }
+
+    // If no left-hand fist was detected, proceed with the normal pinch logic
     const hands = landmarks.map((hand) => this.getHandData(hand));
     const hand1 = hands[0];
     const hand2 = hands[1];
-
-    if ((hand1 && hand1.isFist) || (hand2 && hand2.isFist)) {
-      console.log("Fist detected! Resetting camera.");
-      this.controls.reset();
-      this.isPanning = this.isMultiHandGesture = false;
-      return;
-    }
 
     if (hand1 && hand2 && hand1.isPinching && hand2.isPinching) {
       const distXY = Math.hypot(
@@ -185,6 +186,7 @@ export class HandController {
           PAN_SENSITIVITY *
           (this.controls.object.position.distanceTo(this.controls.target) /
             this.controls.object.zoom);
+
         const vX = new Vector3().setFromMatrixColumn(
           this.controls.object.matrix,
           0
@@ -193,9 +195,11 @@ export class HandController {
           this.controls.object.matrix,
           1
         );
-        const panOffset = vX
-          .multiplyScalar(delta.x * panScaleFactor)
-          .add(vY.multiplyScalar(delta.y * panScaleFactor));
+
+        const panOffsetX = vX.clone().multiplyScalar(delta.x * panScaleFactor);
+        const panOffsetY = vY.clone().multiplyScalar(delta.y * panScaleFactor);
+        const panOffset = new Vector3().add(panOffsetX).add(panOffsetY);
+
         this.panDelta.add(panOffset);
         this.panStart.copy(panEnd);
       }

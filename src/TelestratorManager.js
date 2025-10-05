@@ -4,7 +4,6 @@ import {
   Line,
   BufferGeometry,
   LineBasicMaterial,
-  LineDashedMaterial,
   Vector3,
   Group,
   Mesh,
@@ -14,9 +13,8 @@ import {
   ArcCurve,
   PlaneGeometry,
   CircleGeometry,
-  Shape,
-  ShapeGeometry,
 } from "three";
+import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { XgVisualizer } from "./XgVisualizer.js";
 import { calculateXg } from "./XgCalculator.js";
 
@@ -83,13 +81,33 @@ function isPointInTriangle(p, p0, p1, p2) {
   return s > 0 && t > 0 && s + t < 2 * A * sign;
 }
 
+function calculatePolygonArea(points) {
+  let area = 0;
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    const p1 = points[i];
+    const p2 = points[(i + 1) % n];
+    area += p1.x * p2.z - p2.x * p1.z;
+  }
+  return Math.abs(area / 2.0);
+}
+
 export class TelestratorManager {
-  constructor(scene, camera, groundPlane, playerManager, { onDrawStart }) {
+  constructor(
+    scene,
+    camera,
+    groundPlane,
+    playerManager,
+    labelRenderer,
+    { onDrawStart }
+  ) {
     this.scene = scene;
     this.camera = camera;
     this.groundPlane = groundPlane;
     this.playerManager = playerManager;
+    this.labelRenderer = labelRenderer;
     this.onDrawStart = onDrawStart;
+
     this.raycaster = new Raycaster();
     this.mouse = new Vector2();
     this.currentTool = "cursor";
@@ -100,9 +118,18 @@ export class TelestratorManager {
     this.scene.add(this.annotations);
     this.highlights = new Map();
     this.highlightedPlayerIds = new Set();
-    this.isConnectMode = false;
     this.isTrackMode = false;
-    this.connectionShape = null;
+
+    this.formationShapes = new Group();
+    this.scene.add(this.formationShapes);
+    this.formationLabels = new Group();
+    this.scene.add(this.formationLabels);
+
+    this.formationToolState = {
+      home: new Set(),
+      away: new Set(),
+    };
+
     this.passingLaneState = "idle";
     this.passer = null;
     this.activeLanes = [];
@@ -119,15 +146,28 @@ export class TelestratorManager {
     this.currentTool = tool;
     this.passer = null;
     this.passingLaneState = "idle";
+    if (tool !== "connect-highlighted") {
+      this.formationToolState.home.clear();
+      this.formationToolState.away.clear();
+    }
+  }
+
+  updateFormationTool(teamId, tool, isEnabled) {
+    this.currentTool = "none";
+    if (tool === "clear-all") {
+      this.formationToolState[teamId].clear();
+      return;
+    }
+
+    if (isEnabled) {
+      this.formationToolState[teamId].add(tool);
+    } else {
+      this.formationToolState[teamId].delete(tool);
+    }
   }
 
   setColor(color) {
     this.currentColor = color;
-  }
-
-  setConnectMode(enabled) {
-    this.isConnectMode = enabled;
-    this.updateConnectionShape();
   }
 
   setTrackMode(enabled) {
@@ -166,6 +206,7 @@ export class TelestratorManager {
 
   handleMouseDown(event) {
     if (event.button !== 0) return;
+    if (this.currentTool === "none") return; // Disable drawing when formation tool is active
 
     if (this.currentTool === "passing-lane") {
       const playerMeshes = this.playerManager.getPlayerMeshes();
@@ -205,7 +246,6 @@ export class TelestratorManager {
         while (
           objectToErase.parent &&
           !objectToErase.userData.isHighlight &&
-          !objectToErase.userData.isConnectionShape &&
           objectToErase.parent !== this.annotations &&
           objectToErase.parent !== this.passingLanesGroup
         ) {
@@ -219,7 +259,6 @@ export class TelestratorManager {
           if (playerIdToRemove) {
             this.highlights.delete(playerIdToRemove);
             this.highlightedPlayerIds.delete(playerIdToRemove);
-            this.updateConnectionShape();
             const player = this.playerManager.playerMap.get(playerIdToRemove);
             if (player) player.stopTracking(this.scene);
           }
@@ -260,12 +299,15 @@ export class TelestratorManager {
             clickedPlayer.startTracking(this.scene);
           }
         }
-        this.updateConnectionShape();
       }
       return;
     }
 
-    if (this.currentTool === "cursor") return;
+    if (
+      this.currentTool === "cursor" ||
+      this.currentTool === "connect-highlighted"
+    )
+      return;
     const startPoint = this.getIntersectionPoint(event);
     if (!startPoint) return;
     if (this.onDrawStart) this.onDrawStart();
@@ -406,7 +448,6 @@ export class TelestratorManager {
         if (playerIdToRemove) {
           this.highlights.delete(playerIdToRemove);
           this.highlightedPlayerIds.delete(playerIdToRemove);
-          this.updateConnectionShape();
           const player = this.playerManager.playerMap.get(playerIdToRemove);
           if (player) player.stopTracking(this.scene);
         }
@@ -455,7 +496,11 @@ export class TelestratorManager {
     this.annotations.clear();
     this.highlights.clear();
     this.highlightedPlayerIds.clear();
-    this.updateConnectionShape();
+    this.formationShapes.clear();
+    this.formationLabels.clear();
+    this.formationToolState.home.clear();
+    this.formationToolState.away.clear();
+
     for (const player of this.playerManager.playerMap.values()) {
       player.stopTracking(this.scene);
       player.hideInterceptorHighlight();
@@ -478,35 +523,130 @@ export class TelestratorManager {
     }
   }
 
-  updateConnectionShape() {
-    if (this.connectionShape) {
-      this.annotations.remove(this.connectionShape);
-      this.connectionShape.geometry.dispose();
-      if (this.connectionShape.material)
-        this.connectionShape.material.dispose();
-      this.connectionShape = null;
+  createLabel(text, position) {
+    const div = document.createElement("div");
+    div.className = "formation-label";
+    div.textContent = text;
+    div.style.color = "white";
+    div.style.fontSize = "14px";
+    div.style.fontWeight = "bold";
+    div.style.padding = "2px 5px";
+    div.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
+    div.style.borderRadius = "4px";
+    div.style.textShadow = "1px 1px 2px black";
+
+    const label = new CSS2DObject(div);
+    label.position.copy(position);
+    this.formationLabels.add(label);
+  }
+
+  updateFormationShapes() {
+    this.formationShapes.clear();
+    this.formationLabels.clear();
+
+    const homeTeamName = this.playerManager.metadata.home_team.name;
+    const awayTeamName = this.playerManager.metadata.away_team.name;
+    const teams = [
+      {
+        id: "home",
+        name: homeTeamName,
+        color: this.playerManager.teamColorMap[homeTeamName],
+      },
+      {
+        id: "away",
+        name: awayTeamName,
+        color: this.playerManager.teamColorMap[awayTeamName],
+      },
+    ];
+
+    for (const team of teams) {
+      for (const tool of this.formationToolState[team.id]) {
+        let players = [];
+        let isConvex = tool === "full-team-convex";
+
+        if (isConvex) {
+          players = this.playerManager.getAllTeamPlayers(team.name);
+        } else {
+          players = this.playerManager.getPlayersByGroup(team.name, tool);
+        }
+
+        if (players.length < 2) continue;
+
+        const positions = players.map((p) => p.mesh.position);
+        const material = new LineBasicMaterial({
+          color: team.color.clone().multiplyScalar(1.2),
+          linewidth: 3,
+        });
+        let shapePoints = [];
+
+        if (isConvex) {
+          shapePoints = computeConvexHull2D(positions);
+          if (shapePoints.length > 0) {
+            const area = calculatePolygonArea(shapePoints);
+            const centroid = shapePoints
+              .reduce((acc, p) => acc.add(p), new Vector3())
+              .divideScalar(shapePoints.length);
+            centroid.y = Y_OFFSET + 0.5;
+            this.createLabel(`${area.toFixed(0)} m²`, centroid);
+            shapePoints.push(shapePoints[0]);
+          }
+        } else {
+          shapePoints = positions.sort((a, b) => a.z - b.z);
+          let totalDist = 0;
+          for (let i = 0; i < shapePoints.length - 1; i++) {
+            totalDist += shapePoints[i].distanceTo(shapePoints[i + 1]);
+          }
+          if (shapePoints.length > 0) {
+            const midPoint = shapePoints
+              .reduce((acc, p) => acc.add(p), new Vector3())
+              .divideScalar(shapePoints.length);
+            midPoint.y = Y_OFFSET + 0.5;
+            this.createLabel(`${totalDist.toFixed(1)} m`, midPoint);
+          }
+        }
+
+        if (shapePoints.length > 0) {
+          const geometry = new BufferGeometry().setFromPoints(shapePoints);
+          const line = new Line(geometry, material);
+          line.position.y = Y_OFFSET + 0.01;
+          this.formationShapes.add(line);
+        }
+      }
     }
-    if (!this.isConnectMode || this.highlightedPlayerIds.size < 2) return;
-    const playerPositions = [];
-    for (const playerId of this.highlightedPlayerIds) {
-      const player = this.playerManager.playerMap.get(playerId);
-      if (player && player.mesh) playerPositions.push(player.mesh.position);
-    }
-    if (playerPositions.length < 2) return;
-    const material = new LineBasicMaterial({ color: 0xff4136, linewidth: 3 });
-    let shapePoints = [];
-    if (playerPositions.length === 2) {
-      shapePoints = playerPositions;
-    } else {
-      shapePoints = computeConvexHull2D(playerPositions);
-      if (shapePoints.length > 0) shapePoints.push(shapePoints[0]);
-    }
-    if (shapePoints.length > 0) {
-      const geometry = new BufferGeometry().setFromPoints(shapePoints);
-      this.connectionShape = new Line(geometry, material);
-      this.connectionShape.userData.isConnectionShape = true;
-      this.connectionShape.position.y = Y_OFFSET + 0.01;
-      this.annotations.add(this.connectionShape);
+
+    if (
+      this.currentTool === "connect-highlighted" &&
+      this.highlightedPlayerIds.size >= 2
+    ) {
+      const highlightedPlayers = [];
+      this.highlightedPlayerIds.forEach((id) => {
+        const player = this.playerManager.playerMap.get(id);
+        if (player) highlightedPlayers.push(player);
+      });
+
+      if (highlightedPlayers.length < 2) return;
+
+      const positions = highlightedPlayers.map((p) => p.mesh.position);
+      const material = new LineBasicMaterial({
+        color: this.currentColor,
+        linewidth: 3,
+      });
+
+      let shapePoints = computeConvexHull2D(positions);
+      if (shapePoints.length > 0) {
+        const area = calculatePolygonArea(shapePoints);
+        const centroid = shapePoints
+          .reduce((acc, p) => acc.add(p), new Vector3())
+          .divideScalar(shapePoints.length);
+        centroid.y = Y_OFFSET + 0.5;
+        this.createLabel(`${area.toFixed(0)} m²`, centroid);
+        shapePoints.push(shapePoints[0]);
+
+        const geometry = new BufferGeometry().setFromPoints(shapePoints);
+        const line = new Line(geometry, material);
+        line.position.y = Y_OFFSET + 0.01;
+        this.formationShapes.add(line);
+      }
     }
   }
 
@@ -686,29 +826,7 @@ export class TelestratorManager {
         highlightMesh.visible = false;
       }
     }
-    if (this.connectionShape && this.isConnectMode) {
-      const livePositions = [];
-      for (const playerId of this.highlightedPlayerIds) {
-        const player = this.playerManager.playerMap.get(playerId);
-        if (player && player.mesh) livePositions.push(player.mesh.position);
-      }
-      if (livePositions.length < 2) {
-        this.updateConnectionShape();
-        return;
-      }
-      let newShapePoints = [];
-      if (livePositions.length === 2) {
-        newShapePoints = livePositions;
-      } else {
-        newShapePoints = computeConvexHull2D(livePositions);
-        if (newShapePoints.length > 0) newShapePoints.push(newShapePoints[0]);
-      }
-      if (newShapePoints.length > 0) {
-        this.connectionShape.geometry.dispose();
-        this.connectionShape.geometry = new BufferGeometry().setFromPoints(
-          newShapePoints
-        );
-      }
-    }
+
+    this.updateFormationShapes();
   }
 }
