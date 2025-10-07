@@ -1,3 +1,5 @@
+// FILE: src/TelestratorManager.js
+
 import {
   Raycaster,
   Vector2,
@@ -17,6 +19,50 @@ import {
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { XgVisualizer } from "./XgVisualizer.js";
 import { calculateXg } from "./XgCalculator.js";
+import { LsVisualizer } from "./LsVisualizer.js";
+import { calculateLs } from "./LsCalculator.js";
+import { PathVisualizer } from "./PathVisualizer.js";
+
+// --- HELPER FUNCTIONS ---
+function findClosestPlayer(targetPosition, players) {
+  let closestPlayer = null;
+  let minDistance = Infinity;
+  for (const player of players) {
+    if (!player || !player.mesh) continue;
+    const distance = player.mesh.position.distanceTo(targetPosition);
+    if (distance < minDistance) {
+      minDistance = distance;
+      closestPlayer = player;
+    }
+  }
+  return { player: closestPlayer, distance: minDistance };
+}
+
+function isPointInTriangle(p, p0, p1, p2) {
+  const p_2d = new Vector2(p.x, p.z);
+  const p0_2d = new Vector2(p0.x, p0.z);
+  const p1_2d = new Vector2(p1.x, p1.z);
+  const p2_2d = new Vector2(p2.x, p2.z);
+  const s =
+    p0_2d.y * p2_2d.x -
+    p0_2d.x * p2_2d.y +
+    (p2_2d.y - p0_2d.y) * p_2d.x +
+    (p0_2d.x - p2_2d.x) * p_2d.y;
+  const t =
+    p0_2d.x * p1_2d.y -
+    p0_2d.y * p1_2d.x +
+    (p0_2d.y - p1_2d.y) * p_2d.x +
+    (p1_2d.x - p0_2d.x) * p_2d.y;
+  if (s < 0 != t < 0 && s != 0 && t != 0) {
+    return false;
+  }
+  const A =
+    -p1_2d.y * p2_2d.x +
+    p0_2d.y * (p2_2d.x - p1_2d.x) +
+    p0_2d.x * (p1_2d.y - p2_2d.y) +
+    p1_2d.x * p2_2d.y;
+  return A < 0 ? s <= 0 && s + t >= A : s >= 0 && s + t <= A;
+}
 
 const Y_OFFSET = 0.02;
 const INTERCEPTION_RADIUS = 1.5;
@@ -32,9 +78,8 @@ function computeConvexHull2D(points) {
     while (
       lower.length >= 2 &&
       cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0
-    ) {
+    )
       lower.pop();
-    }
     lower.push(p);
   }
   const upper = [];
@@ -43,9 +88,8 @@ function computeConvexHull2D(points) {
     while (
       upper.length >= 2 &&
       cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0
-    ) {
+    )
       upper.pop();
-    }
     upper.push(p);
   }
   return lower
@@ -65,20 +109,6 @@ function distanceToLineSegment(p, v, w) {
     v.z + t * (w.z - v.z)
   );
   return p.distanceTo(projection);
-}
-
-function isPointInTriangle(p, p0, p1, p2) {
-  const A =
-    (1 / 2) *
-    (-p1.y * p2.x + p0.y * (-p1.x + p2.x) + p0.x * (p1.y - p2.y) + p1.x * p2.y);
-  const sign = A < 0 ? -1 : 1;
-  const s =
-    (p0.y * p2.x - p0.x * p2.y + (p2.y - p0.y) * p.x + (p0.x - p2.x) * p.y) *
-    sign;
-  const t =
-    (p0.x * p1.y - p0.y * p1.x + (p0.y - p1.y) * p.x + (p1.x - p0.x) * p.y) *
-    sign;
-  return s > 0 && t > 0 && s + t < 2 * A * sign;
 }
 
 function calculatePolygonArea(points) {
@@ -107,7 +137,6 @@ export class TelestratorManager {
     this.playerManager = playerManager;
     this.labelRenderer = labelRenderer;
     this.onDrawStart = onDrawStart;
-
     this.raycaster = new Raycaster();
     this.mouse = new Vector2();
     this.currentTool = "cursor";
@@ -119,17 +148,11 @@ export class TelestratorManager {
     this.highlights = new Map();
     this.highlightedPlayerIds = new Set();
     this.isTrackMode = false;
-
     this.formationShapes = new Group();
     this.scene.add(this.formationShapes);
     this.formationLabels = new Group();
     this.scene.add(this.formationLabels);
-
-    this.formationToolState = {
-      home: new Set(),
-      away: new Set(),
-    };
-
+    this.formationToolState = { home: new Set(), away: new Set() };
     this.passingLaneState = "idle";
     this.passer = null;
     this.activeLanes = [];
@@ -137,6 +160,10 @@ export class TelestratorManager {
     this.scene.add(this.passingLanesGroup);
     this.isXgMode = false;
     this.xgVisualizer = new XgVisualizer(scene);
+    this.isLsMode = false;
+    this.lsVisualizer = new LsVisualizer(scene);
+    this.pathVisualizer = new PathVisualizer(scene);
+    this.previousPathInterceptors = new Set();
     this.previousPressuringDefenders = new Set();
     this.pitchLength = 105;
     this.pitchWidth = 68;
@@ -158,7 +185,6 @@ export class TelestratorManager {
       this.formationToolState[teamId].clear();
       return;
     }
-
     if (isEnabled) {
       this.formationToolState[teamId].add(tool);
     } else {
@@ -192,6 +218,18 @@ export class TelestratorManager {
     }
   }
 
+  setLsMode(enabled) {
+    this.isLsMode = enabled;
+    if (!enabled) {
+      this.lsVisualizer.setVisible(false);
+      this.pathVisualizer.setVisible(false);
+      this.previousPathInterceptors.forEach((p) =>
+        p.hideInterceptorHighlight()
+      );
+      this.previousPathInterceptors.clear();
+    }
+  }
+
   getIntersectionPoint(event) {
     this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -206,7 +244,7 @@ export class TelestratorManager {
 
   handleMouseDown(event) {
     if (event.button !== 0) return;
-    if (this.currentTool === "none") return; // Disable drawing when formation tool is active
+    if (this.currentTool === "none") return;
 
     if (this.currentTool === "passing-lane") {
       const playerMeshes = this.playerManager.getPlayerMeshes();
@@ -500,7 +538,6 @@ export class TelestratorManager {
     this.formationLabels.clear();
     this.formationToolState.home.clear();
     this.formationToolState.away.clear();
-
     for (const player of this.playerManager.playerMap.values()) {
       player.stopTracking(this.scene);
       player.hideInterceptorHighlight();
@@ -513,6 +550,9 @@ export class TelestratorManager {
     this.activeLanes = [];
     this.passingLanesGroup.clear();
     this.setXgMode(false);
+    this.previousPathInterceptors.forEach((p) => p.hideInterceptorHighlight());
+    this.previousPathInterceptors.clear();
+    this.setLsMode(false);
   }
 
   clearAllTrackLines() {
@@ -534,7 +574,6 @@ export class TelestratorManager {
     div.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
     div.style.borderRadius = "4px";
     div.style.textShadow = "1px 1px 2px black";
-
     const label = new CSS2DObject(div);
     label.position.copy(position);
     this.formationLabels.add(label);
@@ -543,7 +582,6 @@ export class TelestratorManager {
   updateFormationShapes() {
     this.formationShapes.clear();
     this.formationLabels.clear();
-
     const homeTeamName = this.playerManager.metadata.home_team.name;
     const awayTeamName = this.playerManager.metadata.away_team.name;
     const teams = [
@@ -558,27 +596,22 @@ export class TelestratorManager {
         color: this.playerManager.teamColorMap[awayTeamName],
       },
     ];
-
     for (const team of teams) {
       for (const tool of this.formationToolState[team.id]) {
         let players = [];
         let isConvex = tool === "full-team-convex";
-
         if (isConvex) {
           players = this.playerManager.getAllTeamPlayers(team.name);
         } else {
           players = this.playerManager.getPlayersByGroup(team.name, tool);
         }
-
         if (players.length < 2) continue;
-
         const positions = players.map((p) => p.mesh.position);
         const material = new LineBasicMaterial({
           color: team.color.clone().multiplyScalar(1.2),
           linewidth: 3,
         });
         let shapePoints = [];
-
         if (isConvex) {
           shapePoints = computeConvexHull2D(positions);
           if (shapePoints.length > 0) {
@@ -604,7 +637,6 @@ export class TelestratorManager {
             this.createLabel(`${totalDist.toFixed(1)} m`, midPoint);
           }
         }
-
         if (shapePoints.length > 0) {
           const geometry = new BufferGeometry().setFromPoints(shapePoints);
           const line = new Line(geometry, material);
@@ -613,7 +645,6 @@ export class TelestratorManager {
         }
       }
     }
-
     if (
       this.currentTool === "connect-highlighted" &&
       this.highlightedPlayerIds.size >= 2
@@ -623,15 +654,12 @@ export class TelestratorManager {
         const player = this.playerManager.playerMap.get(id);
         if (player) highlightedPlayers.push(player);
       });
-
       if (highlightedPlayers.length < 2) return;
-
       const positions = highlightedPlayers.map((p) => p.mesh.position);
       const material = new LineBasicMaterial({
         color: this.currentColor,
         linewidth: 3,
       });
-
       let shapePoints = computeConvexHull2D(positions);
       if (shapePoints.length > 0) {
         const area = calculatePolygonArea(shapePoints);
@@ -641,7 +669,6 @@ export class TelestratorManager {
         centroid.y = Y_OFFSET + 0.5;
         this.createLabel(`${area.toFixed(0)} m²`, centroid);
         shapePoints.push(shapePoints[0]);
-
         const geometry = new BufferGeometry().setFromPoints(shapePoints);
         const line = new Line(geometry, material);
         line.position.y = Y_OFFSET + 0.01;
@@ -707,13 +734,9 @@ export class TelestratorManager {
   }
 
   updateXgVisualizer() {
-    if (!this.isXgMode) {
-      return;
-    }
-
+    if (!this.isXgMode) return;
     const shooterId = [...this.highlightedPlayerIds].pop();
     const shooterPlayer = this.playerManager.playerMap.get(shooterId);
-
     if (!shooterPlayer) {
       this.xgVisualizer.setVisible(false);
       this.previousPressuringDefenders.forEach((p) =>
@@ -722,10 +745,8 @@ export class TelestratorManager {
       this.previousPressuringDefenders.clear();
       return;
     }
-
     const shooterPos_scene = shooterPlayer.mesh.position;
     const shooterTeam = shooterPlayer.playerData.team;
-
     const goalX_scene =
       shooterPos_scene.x > 0 ? -this.pitchLength / 2 : this.pitchLength / 2;
     const goalX_calc = -goalX_scene;
@@ -734,11 +755,9 @@ export class TelestratorManager {
       y: shooterPos_scene.y,
       z: shooterPos_scene.z,
     };
-
     const allOpponents = [];
     let goalkeeper_calc = null;
     let minDistToGoal = Infinity;
-
     for (const player of this.playerManager.playerMap.values()) {
       if (
         player.playerData.team !== shooterTeam &&
@@ -762,7 +781,6 @@ export class TelestratorManager {
       y: p.mesh.position.y,
       z: p.mesh.position.z,
     }));
-
     const xgValue = calculateXg(
       calcShooterPos,
       calcOpponentPositions,
@@ -770,33 +788,27 @@ export class TelestratorManager {
       this.pitchLength,
       this.pitchWidth
     );
-
     const GOAL_WIDTH = 7.32;
     const pressuringDefenders = new Set();
-    const shooterPos2D_scene = new Vector2(
+    const shooterPos_scene_vec3 = new Vector3(
       shooterPos_scene.x,
+      0,
       shooterPos_scene.z
     );
-    const leftPost2D_scene = new Vector2(goalX_scene, GOAL_WIDTH / 2);
-    const rightPost2D_scene = new Vector2(goalX_scene, -GOAL_WIDTH / 2);
-
+    const leftPost_vec3 = new Vector3(goalX_scene, 0, GOAL_WIDTH / 2);
+    const rightPost_vec3 = new Vector3(goalX_scene, 0, -GOAL_WIDTH / 2);
     for (const opponent of allOpponents) {
-      const defenderPos2D_scene = new Vector2(
-        opponent.mesh.position.x,
-        opponent.mesh.position.z
-      );
       if (
         isPointInTriangle(
-          defenderPos2D_scene,
-          shooterPos2D_scene,
-          leftPost2D_scene,
-          rightPost2D_scene
+          opponent.mesh.position,
+          shooterPos_scene_vec3,
+          leftPost_vec3,
+          rightPost_vec3
         )
       ) {
         pressuringDefenders.add(opponent);
       }
     }
-
     pressuringDefenders.forEach((p) => {
       if (!this.previousPressuringDefenders.has(p))
         p.showInterceptorHighlight();
@@ -805,13 +817,136 @@ export class TelestratorManager {
       if (!pressuringDefenders.has(p)) p.hideInterceptorHighlight();
     });
     this.previousPressuringDefenders = pressuringDefenders;
-
     const goalPosts_scene = {
       left: new Vector3(goalX_scene, Y_OFFSET, GOAL_WIDTH / 2),
       right: new Vector3(goalX_scene, Y_OFFSET, -GOAL_WIDTH / 2),
     };
-
     this.xgVisualizer.update(shooterPos_scene, goalPosts_scene, xgValue);
+  }
+
+  updateLsVisualizer() {
+    if (!this.isLsMode) {
+      return;
+    }
+
+    const zones = this.getZones();
+    const targetZone = zones.length > 0 ? zones[zones.length - 1] : null;
+
+    const playerInPossession = this.playerManager.playerInPossession;
+
+    if (!targetZone || !playerInPossession) {
+      this.lsVisualizer.setVisible(false);
+      this.pathVisualizer.setVisible(false);
+      this.previousPathInterceptors.forEach((p) =>
+        p.hideInterceptorHighlight()
+      );
+      this.previousPathInterceptors.clear();
+      return;
+    }
+
+    const possessionHolderPosition = playerInPossession.mesh.position;
+    const attackingTeamName = playerInPossession.playerData.team;
+    const homeTeamName = this.playerManager.metadata.home_team.name;
+    const awayTeamName = this.playerManager.metadata.away_team.name;
+    const defendingTeamName =
+      attackingTeamName === homeTeamName ? awayTeamName : homeTeamName;
+    const attackers = this.playerManager.getAllTeamPlayers(attackingTeamName);
+    const defenders = this.playerManager.getAllTeamPlayers(defendingTeamName);
+
+    if (attackers.length === 0) {
+      this.lsVisualizer.update(targetZone, 0.0);
+      this.pathVisualizer.setVisible(false);
+      return;
+    }
+
+    // Heuristic to determine goal direction based on which half of the pitch the player is in
+    const isAttackingPositiveX = playerInPossession.mesh.position.x < 0;
+    const goalPosition = new Vector3(
+      isAttackingPositiveX ? this.pitchLength / 2 : -this.pitchLength / 2,
+      0,
+      0
+    );
+
+    const center = targetZone.position;
+    const halfWidth = targetZone.scale.x / 2;
+    const halfDepth = targetZone.scale.y / 2;
+    const lq = {
+      center: center.clone(),
+      corners: [
+        new Vector3(center.x - halfWidth, Y_OFFSET, center.z - halfDepth),
+        new Vector3(center.x + halfWidth, Y_OFFSET, center.z - halfDepth),
+        new Vector3(center.x + halfWidth, Y_OFFSET, center.z + halfDepth),
+        new Vector3(center.x - halfWidth, Y_OFFSET, center.z + halfDepth),
+      ],
+    };
+
+    let maxAngle = -1;
+    let coneCorners = [];
+    for (let i = 0; i < lq.corners.length; i++) {
+      for (let j = i + 1; j < lq.corners.length; j++) {
+        const v1 = new Vector3().subVectors(
+          lq.corners[i],
+          possessionHolderPosition
+        );
+        const v2 = new Vector3().subVectors(
+          lq.corners[j],
+          possessionHolderPosition
+        );
+        const angle = v1.angleTo(v2);
+        if (angle > maxAngle) {
+          maxAngle = angle;
+          coneCorners = [lq.corners[i], lq.corners[j]];
+        }
+      }
+    }
+    if (coneCorners.length < 2) return;
+
+    const sortedConeCorners = coneCorners.sort((a, b) => a.z - b.z);
+    const conePoints = [possessionHolderPosition, ...sortedConeCorners];
+    const currentPathInterceptors = defenders.filter((def) =>
+      isPointInTriangle(def.mesh.position, ...conePoints)
+    );
+
+    const bestReceiverInfo = findClosestPlayer(lq.center, attackers);
+    const pressureOnCarrier = findClosestPlayer(
+      possessionHolderPosition,
+      defenders
+    ).distance;
+    const lsValue = calculateLs(
+      lq,
+      pressureOnCarrier,
+      currentPathInterceptors.length,
+      bestReceiverInfo,
+      goalPosition
+    );
+
+    const distanceFactor = Math.max(
+      0,
+      1 - possessionHolderPosition.distanceTo(lq.center) / 40
+    );
+    const pressureFactor = Math.min(1, pressureOnCarrier / 10);
+    const obstructionFactor = Math.max(
+      0,
+      1 - currentPathInterceptors.length * 0.5
+    );
+    const pathScore =
+      distanceFactor * 0.4 + pressureFactor * 0.2 + obstructionFactor * 0.4;
+
+    this.lsVisualizer.update(targetZone, lsValue);
+    this.pathVisualizer.update(
+      possessionHolderPosition,
+      sortedConeCorners,
+      pathScore
+    );
+
+    const interceptorSet = new Set(currentPathInterceptors);
+    interceptorSet.forEach((p) => {
+      if (!this.previousPathInterceptors.has(p)) p.showInterceptorHighlight();
+    });
+    this.previousPathInterceptors.forEach((p) => {
+      if (!interceptorSet.has(p)) p.hideInterceptorHighlight();
+    });
+    this.previousPathInterceptors = interceptorSet;
   }
 
   update() {
@@ -826,7 +961,9 @@ export class TelestratorManager {
         highlightMesh.visible = false;
       }
     }
-
     this.updateFormationShapes();
+    this.updatePassingLanes();
+    this.updateXgVisualizer();
+    this.updateLsVisualizer();
   }
 }

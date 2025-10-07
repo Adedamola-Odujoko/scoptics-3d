@@ -1,3 +1,5 @@
+// FILE: src/main.js
+
 import {
   Scene,
   PerspectiveCamera,
@@ -304,6 +306,7 @@ async function main() {
     onTrackToggle: (enabled) => telestratorManager.setTrackMode(enabled),
     onClearTracks: () => telestratorManager.clearAllTrackLines(),
     onXgToggle: (enabled) => telestratorManager.setXgMode(enabled),
+    onLsToggle: (enabled) => telestratorManager.setLsMode(enabled), // <-- MODIFIED LINE
   });
 
   const buffer = new PlaybackBuffer();

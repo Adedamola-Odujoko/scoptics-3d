@@ -5,10 +5,11 @@ export function createTelestratorUI({
   onColorSelect,
   onClear,
   onUndo,
-  onFormationToolUpdate, // New handler for checkbox updates
+  onFormationToolUpdate,
   onTrackToggle,
   onClearTracks,
   onXgToggle,
+  onLsToggle, // <-- ADDED: Handler for the new LS checkbox
   homeTeamName,
   awayTeamName,
 }) {
@@ -210,15 +211,16 @@ export function createTelestratorUI({
   // --- Other Modes & Actions ---
   createCheckbox("Track", onTrackToggle);
   createCheckbox("View xG", onXgToggle);
+  createCheckbox("View LS", onLsToggle); // <-- MODIFIED: This is the new checkbox
   createSeparator();
 
-  const undoBtn = createButton("undo", "Undo Last");
+  const undoBtn = createButton("undo", "Undo Last", false); // isTool is false
   undoBtn.onclick = onUndo;
 
-  const clearTracksBtn = createButton("clear-tracks", "Clear Trails");
+  const clearTracksBtn = createButton("clear-tracks", "Clear Trails", false); // isTool is false
   clearTracksBtn.onclick = onClearTracks;
 
-  const clearBtn = createButton("clear", "Clear All");
+  const clearBtn = createButton("clear", "Clear All", false); // isTool is false
   clearBtn.onclick = onClear;
 
   // --- Colors ---
