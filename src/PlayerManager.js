@@ -4,17 +4,16 @@ import { Player } from "./Player.js";
 import { teamColors } from "./skeleton.js";
 import { Vector3 } from "three";
 
-const GRACE_PERIOD_MS = 60000;
-const interpolatedPosition = new Vector3();
-const POSSESSION_THRESHOLD = 1.5; // Player must be within 1.5 meters of the ball to be considered in possession
+const GRACE_PERIOD_MS = 50000000;
+const POSSESSION_THRESHOLD = 1.5;
 
-// Define which role acronyms belong to which group
 const ROLE_GROUPS = {
   backline: ["LCB", "RCB", "CB", "LWB", "RWB", "LB", "RB"],
   midfield: ["CM", "LM", "RM", "CDM", "CAM", "DM", "AM"],
   attack: ["LW", "RW", "CF", "ST"],
   spine: ["GK", "LCB", "RCB", "CB", "CM", "CDM", "CAM", "DM", "AM", "CF", "ST"],
 };
+const interpolatedPosition = new Vector3();
 
 export class PlayerManager {
   constructor(scene, teamColorMap, metadata) {
@@ -22,107 +21,173 @@ export class PlayerManager {
     this.playerMap = new Map();
     this.teamColorMap = teamColorMap || {};
     this.metadata = metadata;
-    this.lastSeen = new Map();
     this.ball = null;
-    this.playerInPossession = null; // Tracks the player object currently with the ball
+    this.playerInPossession = null;
+    this.gapStates = new Map();
   }
 
-  // This private method is called every frame to determine who has the ball
   _updatePlayerInPossession() {
-    // If there's no ball in the scene, no one can have possession.
-    if (!this.ball || !this.ball.mesh) {
+    if (!this.ball) {
       if (this.playerInPossession) {
         this.playerInPossession.hidePossessionHighlight();
         this.playerInPossession = null;
       }
       return;
     }
-
     let closestPlayer = null;
-    let minDistance = POSSESSION_THRESHOLD; // Start with the max allowed distance
-
-    // Iterate through all players to find the one closest to the ball
+    let minDistance = POSSESSION_THRESHOLD;
     for (const player of this.playerMap.values()) {
       if (
         player.playerData.name === "Ball" ||
-        player.playerData.team === "Referee" ||
-        !player.mesh
+        player.playerData.team === "Referee"
       )
         continue;
-
       const dist = player.mesh.position.distanceTo(this.ball.mesh.position);
       if (dist < minDistance) {
         minDistance = dist;
         closestPlayer = player;
       }
     }
-
-    // If the closest player is different from the one who last had the ball
     if (closestPlayer && this.playerInPossession !== closestPlayer) {
-      // Hide the highlight on the old player (if there was one)
       if (this.playerInPossession) {
         this.playerInPossession.hidePossessionHighlight();
       }
-      // Set the new player and show their highlight
       this.playerInPossession = closestPlayer;
       this.playerInPossession.showPossessionHighlight();
-    }
-    // If no player is close enough to the ball, clear possession
-    else if (!closestPlayer && this.playerInPossession) {
+    } else if (!closestPlayer && this.playerInPossession) {
       this.playerInPossession.hidePossessionHighlight();
       this.playerInPossession = null;
     }
   }
 
-  updateWithInterpolation(prevFrame, nextFrame, alpha) {
+  // --- REFINED INTERPOLATION LOGIC ---
+  updateWithInterpolation(prevFrame, nextFrame, alpha, buffer) {
     if (!prevFrame || !nextFrame) return;
 
-    const activePlayerDataSet = nextFrame.players;
     const prevPlayerMap = new Map(prevFrame.players.map((p) => [p.id, p]));
+    const nextPlayerMap = new Map(nextFrame.players.map((p) => [p.id, p]));
+    const allKnownIds = new Set(Array.from(this.playerMap.keys()));
+    nextFrame.players.forEach((p) => allKnownIds.add(p.id));
+
     const now = performance.now();
+    const currentTime =
+      prevFrame.videoTime + (nextFrame.videoTime - prevFrame.videoTime) * alpha;
 
-    for (const nextPlayerData of activePlayerDataSet) {
-      const id = nextPlayerData.id;
-      this.lastSeen.set(id, now);
+    for (const id of allKnownIds) {
+      const prevData = prevPlayerMap.get(id);
+      const nextData = nextPlayerMap.get(id);
+      const playerData =
+        nextData || prevData || this.playerMap.get(id)?.playerData;
 
-      const prevPlayerData = prevPlayerMap.get(id);
-      const color =
-        this.teamColorMap[nextPlayerData.team] || teamColors.Unknown;
+      if (!playerData) continue;
 
       let player = this.playerMap.get(id);
       if (!player) {
-        player = new Player(this.scene, nextPlayerData, color, this);
+        const color = this.teamColorMap[playerData.team] || teamColors.Unknown;
+        player = new Player(this.scene, playerData, color, this);
         this.playerMap.set(id, player);
-        if (nextPlayerData.name === "Ball") {
-          this.ball = player;
+        if (playerData.name === "Ball") this.ball = player;
+      }
+
+      // Case 1: Player is visible in the current interpolation window.
+      if (nextData) {
+        this.gapStates.delete(id); // We have live data, so clear any gap state.
+        player.setInferred(false);
+
+        const startX = prevData ? prevData.x : nextData.x;
+        const startY = prevData ? prevData.y : nextData.y;
+
+        const targetX = startX + (nextData.x - startX) * alpha;
+        const targetY = startY + (nextData.y - startY) * alpha;
+
+        interpolatedPosition.set(targetX / 100.0, 0, targetY / 100.0);
+        player.updateTarget(interpolatedPosition);
+      }
+      // Case 2: Player is NOT visible. We need to check for or continue a gap.
+      else {
+        // Sub-case 2a: This is the START of a new gap.
+        if (!this.gapStates.has(id)) {
+          const futureFrame = buffer.findNextAppearance(
+            id,
+            nextFrame.videoTime
+          );
+          if (futureFrame) {
+            const lastKnownData =
+              prevData || this.playerMap.get(id)?.playerData;
+            if (lastKnownData) {
+              const startPos = new Vector3(
+                lastKnownData.x / 100.0,
+                0,
+                lastKnownData.y / 100.0
+              );
+              const endPos = new Vector3(
+                futureFrame.player.x / 100.0,
+                0,
+                futureFrame.player.y / 100.0
+              );
+              this.gapStates.set(id, {
+                startPos: startPos,
+                endPos: endPos,
+                startTime: nextFrame.videoTime, // Gap starts when they disappear
+                endTime: futureFrame.time,
+              });
+            }
+          }
         }
-      }
 
-      let targetX = nextPlayerData.x;
-      let targetY = nextPlayerData.y;
-      if (prevPlayerData) {
-        targetX =
-          prevPlayerData.x + (nextPlayerData.x - prevPlayerData.x) * alpha;
-        targetY =
-          prevPlayerData.y + (nextPlayerData.y - prevPlayerData.y) * alpha;
-      }
+        // Sub-case 2b: Player is currently in a known gap.
+        if (this.gapStates.has(id)) {
+          player.setInferred(true);
+          const state = this.gapStates.get(id);
 
-      interpolatedPosition.set(targetX / 100.0, 0, targetY / 100.0);
-      player.updateTarget(interpolatedPosition, color);
-    }
+          if (currentTime >= state.endTime) {
+            // We are past the gap, but the player is not in nextData yet.
+            // This can happen at the exact frame of reappearance.
+            // The next frame's logic will handle their live position.
+            // For now, just place them at the end position.
+            player.updateTarget(state.endPos);
+            this.gapStates.delete(id);
+            player.setInferred(false);
+          } else {
+            const gapDuration = state.endTime - state.startTime;
+            const timeIntoGap = currentTime - state.startTime;
+            const gapAlpha = Math.max(
+              0,
+              Math.min(1, timeIntoGap / gapDuration)
+            );
 
-    for (const [id, player] of this.playerMap.entries()) {
-      const lastSeenTime = this.lastSeen.get(id);
-      if (now - lastSeenTime > GRACE_PERIOD_MS) {
-        if (player === this.ball) this.ball = null;
-        if (player === this.playerInPossession) this.playerInPossession = null; // Clear possession if player disappears
-        player.destroy(this.scene);
-        this.playerMap.delete(id);
-        this.lastSeen.delete(id);
+            interpolatedPosition.lerpVectors(
+              state.startPos,
+              state.endPos,
+              gapAlpha
+            );
+            player.updateTarget(interpolatedPosition);
+          }
+        } else {
+          // If there's no future frame, we do nothing. The player will be removed by the grace period logic.
+          player.setInferred(true);
+        }
       }
     }
   }
 
+  hasInferredPlayers() {
+    for (const player of this.playerMap.values()) {
+      if (player.isInferred) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  smoothAll(alpha, dt) {
+    for (const player of this.playerMap.values()) {
+      player.smooth(alpha, dt);
+    }
+    this._updatePlayerInPossession();
+  }
+
+  // --- GETTERS ---
   getPlayersByGroup(teamName, group) {
     const roles = ROLE_GROUPS[group];
     if (!roles) return [];
@@ -151,14 +216,6 @@ export class PlayerManager {
       }
     }
     return players;
-  }
-
-  smoothAll(alpha, dt) {
-    for (const player of this.playerMap.values()) {
-      player.smooth(alpha, dt);
-    }
-    // This is called every frame after all player positions have been updated
-    this._updatePlayerInPossession();
   }
 
   getPlayerMeshes() {

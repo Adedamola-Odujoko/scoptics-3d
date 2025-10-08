@@ -24,9 +24,9 @@ import { teamColors } from "./skeleton.js";
 import { PlaybackBuffer } from "./PlaybackBuffer.js";
 import { createTelestratorUI } from "./TelestratorUI.js";
 import { TelestratorManager } from "./TelestratorManager.js";
-import { createStatsUI, updateStats } from "./statsUI.js";
-import { HandController } from "./handcontroller.js";
-import { createDataExporterUI } from "./DataExporterUI.js"; // <-- NEW IMPORT
+import { createStatsUI, updateStats } from "./StatsUI.js";
+import { HandController } from "./handController.js";
+import { createDataExporterUI } from "./DataExporterUI.js";
 
 function createControlsUI() {
   const ctrl = document.createElement("div");
@@ -283,10 +283,8 @@ async function main() {
     }
   );
 
-  const statsContainer = createStatsUI();
-
-  // --- NEW UI INITIALIZATION ---
   createDataExporterUI();
+  const statsContainer = createStatsUI();
 
   createTelestratorUI({
     homeTeamName: metadata.home_team.short_name,
@@ -330,7 +328,6 @@ async function main() {
   ui.slider.value = 0;
   ui.timeLabel.innerText = formatTimeMsDiff(0);
 
-  // --- NEW: Give Telestrator a reference to the clock ---
   const playbackClockRef = { value: playbackClock };
   telestratorManager.setPlaybackClockRef(playbackClockRef);
 
@@ -476,8 +473,6 @@ async function main() {
     if (isPlaying && dt > 0) {
       playbackClock += dt * playbackRate;
     }
-
-    // --- NEW: Update the clock reference every frame ---
     playbackClockRef.value = playbackClock;
 
     const span = buffer.timeSpan();
@@ -491,6 +486,7 @@ async function main() {
     } else {
       isLive = false;
     }
+
     const frames = buffer.findFramesForInterpolation(playbackClock);
     if (frames) {
       const { prev, next } = frames;
@@ -499,12 +495,11 @@ async function main() {
       if (frameDuration > 0) {
         interpAlpha = (playbackClock - prev.videoTime) / frameDuration;
       }
-      playerManager.updateWithInterpolation(prev, next, interpAlpha);
+      playerManager.updateWithInterpolation(prev, next, interpAlpha, buffer);
     }
+
     playerManager.smoothAll(0.15, dt);
-
     handController.update(0.15);
-
     telestratorManager.update();
 
     const zones = telestratorManager.getZones();

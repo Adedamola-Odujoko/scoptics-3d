@@ -30,12 +30,14 @@ export class Player {
     this.currentSpeed = 0;
     this.lastPosition = new Vector3();
     this.isInterceptor = false;
-    this.velocity = new Vector3(); // Stores direction and magnitude of movement
+    this.isInferred = false;
+    this.velocity = new Vector3();
 
     const playerMaterial = new MeshStandardMaterial({
       color: initialColor,
       metalness: 0.2,
       roughness: 0.6,
+      transparent: true,
     });
 
     if (this.playerData.name === "Ball") {
@@ -119,70 +121,13 @@ export class Player {
     this.possessionHighlight.visible = false;
   }
 
-  showInterceptorHighlight() {
-    if (!this.interceptionHighlight) return;
-    this.isInterceptor = true;
-    this.interceptionHighlight.visible = true;
-  }
-
-  hideInterceptorHighlight() {
-    if (!this.interceptionHighlight) return;
-    this.isInterceptor = false;
-    this.interceptionHighlight.visible = false;
-  }
-
-  startTracking(scene) {
-    if (this.isBeingTracked || this.playerData.name === "Ball") return;
-    this.isBeingTracked = true;
-    this.distanceCovered = 0;
-    this.trackPoints = [this.mesh.position.clone()];
-    this.lastPosition.copy(this.mesh.position);
-    const material = new LineDashedMaterial({
-      color: 0xaaaaaa,
-      linewidth: 1,
-      scale: 1,
-      dashSize: 0.5,
-      gapSize: 0.5,
-    });
-    const geometry = new BufferGeometry().setFromPoints(this.trackPoints);
-    this.trackLine = new Line(geometry, material);
-    scene.add(this.trackLine);
-  }
-
-  stopTracking(scene) {
-    if (!this.isBeingTracked) return;
-    this.isBeingTracked = false;
-    this.currentSpeed = 0;
-    if (this.trackLine) {
-      scene.remove(this.trackLine);
-      this.trackLine.geometry.dispose();
-      this.trackLine.material.dispose();
-      this.trackLine = null;
+  setInferred(isInferred) {
+    if (this.isInferred === isInferred) return;
+    this.isInferred = isInferred;
+    this.mesh.material.opacity = isInferred ? 0.4 : 1.0;
+    if (this.label) {
+      this.label.element.style.opacity = isInferred ? 0.4 : 1.0;
     }
-  }
-
-  clearTrackLine() {
-    if (!this.isBeingTracked || !this.trackLine) return;
-    this.distanceCovered = 0;
-    this.trackPoints = [this.mesh.position.clone()];
-    this.lastPosition.copy(this.mesh.position);
-    this.trackLine.geometry.dispose();
-    this.trackLine.geometry = new BufferGeometry().setFromPoints(
-      this.trackPoints
-    );
-    this.trackLine.computeLineDistances();
-  }
-
-  showHighlight() {
-    if (!this.highlight) return;
-    this.isHighlighted = true;
-    this.highlight.visible = true;
-  }
-
-  hideHighlight() {
-    if (!this.highlight) return;
-    this.isHighlighted = false;
-    this.highlight.visible = false;
   }
 
   updateTarget(targetPosition, newColor) {
@@ -191,7 +136,7 @@ export class Player {
       this.mesh.position.y,
       targetPosition.z
     );
-    if (!this.currentColor.equals(newColor)) {
+    if (newColor && !this.currentColor.equals(newColor)) {
       this.currentColor = newColor;
       this.mesh.material.color.set(newColor);
     }
@@ -200,7 +145,10 @@ export class Player {
   smooth(alpha, dt) {
     const prevPos = this.mesh.position.clone();
 
-    this.velocity.copy(this.targetRoot).sub(this.mesh.position);
+    this.velocity
+      .copy(this.targetRoot)
+      .sub(this.mesh.position)
+      .divideScalar(alpha);
 
     this.mesh.position.lerp(this.targetRoot, alpha);
 
@@ -208,6 +156,7 @@ export class Player {
       const distSinceLastPoint = this.mesh.position.distanceTo(
         this.lastPosition
       );
+
       if (distSinceLastPoint > MIN_TRACK_DISTANCE) {
         this.trackPoints.push(this.mesh.position.clone());
         this.lastPosition.copy(this.mesh.position);
@@ -217,8 +166,10 @@ export class Player {
         );
         this.trackLine.computeLineDistances();
       }
+
       const distThisFrame = this.mesh.position.distanceTo(prevPos);
       this.distanceCovered += distThisFrame;
+
       if (dt > 0) {
         this.currentSpeed = distThisFrame / (dt / 1000);
       }
@@ -238,6 +189,65 @@ export class Player {
     }
   }
 
+  showInterceptorHighlight() {
+    if (!this.interceptionHighlight) return;
+    this.isInterceptor = true;
+    this.interceptionHighlight.visible = true;
+  }
+  hideInterceptorHighlight() {
+    if (!this.interceptionHighlight) return;
+    this.isInterceptor = false;
+    this.interceptionHighlight.visible = false;
+  }
+  startTracking(scene) {
+    if (this.isBeingTracked || this.playerData.name === "Ball") return;
+    this.isBeingTracked = true;
+    this.distanceCovered = 0;
+    this.trackPoints = [this.mesh.position.clone()];
+    this.lastPosition.copy(this.mesh.position);
+    const material = new LineDashedMaterial({
+      color: 0xaaaaaa,
+      linewidth: 1,
+      scale: 1,
+      dashSize: 0.5,
+      gapSize: 0.5,
+    });
+    const geometry = new BufferGeometry().setFromPoints(this.trackPoints);
+    this.trackLine = new Line(geometry, material);
+    scene.add(this.trackLine);
+  }
+  stopTracking(scene) {
+    if (!this.isBeingTracked) return;
+    this.isBeingTracked = false;
+    this.currentSpeed = 0;
+    if (this.trackLine) {
+      scene.remove(this.trackLine);
+      this.trackLine.geometry.dispose();
+      this.trackLine.material.dispose();
+      this.trackLine = null;
+    }
+  }
+  clearTrackLine() {
+    if (!this.isBeingTracked || !this.trackLine) return;
+    this.distanceCovered = 0;
+    this.trackPoints = [this.mesh.position.clone()];
+    this.lastPosition.copy(this.mesh.position);
+    this.trackLine.geometry.dispose();
+    this.trackLine.geometry = new BufferGeometry().setFromPoints(
+      this.trackPoints
+    );
+    this.trackLine.computeLineDistances();
+  }
+  showHighlight() {
+    if (!this.highlight) return;
+    this.isHighlighted = true;
+    this.highlight.visible = true;
+  }
+  hideHighlight() {
+    if (!this.highlight) return;
+    this.isHighlighted = false;
+    this.highlight.visible = false;
+  }
   destroy(scene) {
     if (this.label && this.label.element) {
       this.label.element.remove();

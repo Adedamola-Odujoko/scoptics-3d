@@ -1,68 +1,87 @@
+// FILE: src/PlaybackBuffer.js
+
 export class PlaybackBuffer {
-  constructor(maxEntries = 70000, serverFps = 10.0) {
-    this.buf = [];
+  constructor() {
+    this.frames = [];
   }
 
-  push(players, opts = {}) {
-    const entry = {
+  push(players, meta) {
+    this.frames.push({
       players,
-      videoTime: typeof opts.videoTime === "number" ? opts.videoTime : null,
-    };
-    this.buf.push(entry);
-  }
-
-  last() {
-    return this.buf.length ? this.buf[this.buf.length - 1] : null;
+      ...meta,
+    });
   }
 
   first() {
-    return this.buf.length ? this.buf[0] : null;
+    return this.frames[0];
   }
 
-  frameForFraction(frac) {
-    if (!this.buf.length) return null;
-    const start = this.first().videoTime;
-    const end = this.last().videoTime;
-    if (end === start) return this.last();
-    const target = start + frac * (end - start);
-    // Note: We don't need findFrameForVideoTime anymore, as the render loop handles it.
-    // This is just for the slider drag. We can use the more robust interpolation search.
-    const frames = this.findFramesForInterpolation(target);
-    return frames ? frames.prev : this.first();
+  last() {
+    return this.frames[this.frames.length - 1];
   }
 
   timeSpan() {
-    if (!this.buf.length) return { start: 0, end: 0 };
-    return { start: this.first().videoTime, end: this.last().videoTime };
+    if (this.frames.length < 2) return { start: 0, end: 0 };
+    return {
+      start: this.first().videoTime,
+      end: this.last().videoTime,
+    };
   }
 
-  // --- REVISED AND CORRECTED INTERPOLATION SEARCH ---
-  findFramesForInterpolation(videoTime) {
-    if (this.buf.length < 2) return null;
+  findFramesForInterpolation(playbackClock) {
+    if (this.frames.length < 2) return null;
 
-    const first = this.first();
-    if (videoTime <= first.videoTime) {
-      return { prev: first, next: this.buf[1] || first };
+    // Find the first frame that is AFTER the current clock time
+    const nextFrameIndex = this.frames.findIndex(
+      (frame) => frame.videoTime >= playbackClock
+    );
+
+    if (nextFrameIndex === -1) {
+      // Clock is past the end of the buffer
+      return { prev: this.last(), next: this.last() };
+    }
+    if (nextFrameIndex === 0) {
+      // Clock is before the start of the buffer
+      return { prev: this.first(), next: this.first() };
     }
 
-    const last = this.last();
-    if (videoTime >= last.videoTime) {
-      return { prev: last, next: last };
-    }
+    // We have a valid pair
+    const prevFrameIndex = nextFrameIndex - 1;
+    return {
+      prev: this.frames[prevFrameIndex],
+      next: this.frames[nextFrameIndex],
+    };
+  }
 
-    // --- SIMPLE AND RELIABLE LINEAR SEARCH ---
-    // This replaces the buggy binary search.
-    for (let i = 0; i < this.buf.length - 1; i++) {
-      const current = this.buf[i];
-      const next = this.buf[i + 1];
+  frameForFraction(frac) {
+    if (this.frames.length === 0) return null;
+    const idx = Math.floor(frac * (this.frames.length - 1));
+    return this.frames[idx];
+  }
 
-      // Find the two frames that the current time falls between.
-      if (videoTime >= current.videoTime && videoTime < next.videoTime) {
-        return { prev: current, next: next };
+  /**
+   * Finds the next frame where a specific player ID appears.
+   * @param {string} playerId The ID of the player to find.
+   * @param {number} afterTime The time to start searching from.
+   * @returns {{player: object, time: number}|null} The player data and time, or null if not found.
+   */
+  findNextAppearance(playerId, afterTime) {
+    const startIndex = this.frames.findIndex((f) => f.videoTime > afterTime);
+    if (startIndex === -1) return null;
+
+    // Limit search to a reasonable future (e.g., within the grace period)
+    const gracePeriodMs = 600000;
+    const endTime = afterTime + gracePeriodMs;
+
+    for (let i = startIndex; i < this.frames.length; i++) {
+      const frame = this.frames[i];
+      if (frame.videoTime > endTime) break; // Stop searching if it's too far in the future
+
+      const player = frame.players.find((p) => p.id === playerId);
+      if (player) {
+        return { player: player, time: frame.videoTime };
       }
     }
-
-    // Fallback if something goes wrong (should not be reached)
-    return { prev: last, next: last };
+    return null; // Not found within the grace period
   }
 }
