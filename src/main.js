@@ -24,8 +24,9 @@ import { teamColors } from "./skeleton.js";
 import { PlaybackBuffer } from "./PlaybackBuffer.js";
 import { createTelestratorUI } from "./TelestratorUI.js";
 import { TelestratorManager } from "./TelestratorManager.js";
-import { createStatsUI, updateStats } from "./StatsUI.js";
-import { HandController } from "./handController.js";
+import { createStatsUI, updateStats } from "./statsUI.js";
+import { HandController } from "./handcontroller.js";
+import { createDataExporterUI } from "./DataExporterUI.js"; // <-- NEW IMPORT
 
 function createControlsUI() {
   const ctrl = document.createElement("div");
@@ -216,7 +217,6 @@ async function main() {
   const videoEl = document.createElement("video");
   videoEl.autoplay = true;
   videoEl.playsInline = true;
-  // --- FIX 1: Mute the video to allow autoplay ---
   videoEl.muted = true;
   videoEl.style.display = "none";
   document.body.appendChild(videoEl);
@@ -233,7 +233,6 @@ async function main() {
         });
         videoEl.srcObject = stream;
         videoEl.addEventListener("loadeddata", () => {
-          // --- FIX 2: Explicitly play the video ---
           videoEl.play();
           console.log("✅ Hand tracking is active.");
           handController.predictWebcam();
@@ -286,6 +285,9 @@ async function main() {
 
   const statsContainer = createStatsUI();
 
+  // --- NEW UI INITIALIZATION ---
+  createDataExporterUI();
+
   createTelestratorUI({
     homeTeamName: metadata.home_team.short_name,
     awayTeamName: metadata.away_team.short_name,
@@ -306,7 +308,7 @@ async function main() {
     onTrackToggle: (enabled) => telestratorManager.setTrackMode(enabled),
     onClearTracks: () => telestratorManager.clearAllTrackLines(),
     onXgToggle: (enabled) => telestratorManager.setXgMode(enabled),
-    onLsToggle: (enabled) => telestratorManager.setLsMode(enabled), // <-- MODIFIED LINE
+    onLsToggle: (enabled) => telestratorManager.setLsMode(enabled),
   });
 
   const buffer = new PlaybackBuffer();
@@ -327,6 +329,10 @@ async function main() {
   ui.playBtn.innerText = "Play ▶";
   ui.slider.value = 0;
   ui.timeLabel.innerText = formatTimeMsDiff(0);
+
+  // --- NEW: Give Telestrator a reference to the clock ---
+  const playbackClockRef = { value: playbackClock };
+  telestratorManager.setPlaybackClockRef(playbackClockRef);
 
   let cameraMode = "orbit";
   let followedPlayerID = null;
@@ -470,6 +476,10 @@ async function main() {
     if (isPlaying && dt > 0) {
       playbackClock += dt * playbackRate;
     }
+
+    // --- NEW: Update the clock reference every frame ---
+    playbackClockRef.value = playbackClock;
+
     const span = buffer.timeSpan();
     if (playbackClock >= span.end) {
       playbackClock = span.end;
@@ -496,8 +506,6 @@ async function main() {
     handController.update(0.15);
 
     telestratorManager.update();
-    telestratorManager.updatePassingLanes();
-    telestratorManager.updateXgVisualizer();
 
     const zones = telestratorManager.getZones();
     const playersToHighlight = new Set();

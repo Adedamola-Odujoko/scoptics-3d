@@ -37,6 +37,7 @@ export class LsVisualizer {
     }
     this.setVisible(true);
     this.activeZone = zone;
+    this.lastCalculatedScore = lsValue;
 
     // Update Label
     this.lsLabel.element.textContent = `LS: ${lsValue.toFixed(2)}`;

@@ -16,22 +16,21 @@ import {
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 
-const MIN_TRACK_DISTANCE = 0.5; // meters
+const MIN_TRACK_DISTANCE = 0.5;
 
 export class Player {
   constructor(scene, playerData, initialColor, playerManager) {
     this.playerData = playerData;
     this.playerManager = playerManager;
     this.isHighlighted = false;
-
     this.isBeingTracked = false;
     this.trackPoints = [];
     this.trackLine = null;
     this.distanceCovered = 0;
     this.currentSpeed = 0;
     this.lastPosition = new Vector3();
-
     this.isInterceptor = false;
+    this.velocity = new Vector3(); // Stores direction and magnitude of movement
 
     const playerMaterial = new MeshStandardMaterial({
       color: initialColor,
@@ -108,7 +107,6 @@ export class Player {
     this.targetRoot = new Vector3();
     this.targetRoot.copy(this.mesh.position);
     this.currentColor = initialColor;
-    this.velocity = new Vector3();
   }
 
   showPossessionHighlight() {
@@ -139,7 +137,6 @@ export class Player {
     this.distanceCovered = 0;
     this.trackPoints = [this.mesh.position.clone()];
     this.lastPosition.copy(this.mesh.position);
-
     const material = new LineDashedMaterial({
       color: 0xaaaaaa,
       linewidth: 1,
@@ -166,11 +163,9 @@ export class Player {
 
   clearTrackLine() {
     if (!this.isBeingTracked || !this.trackLine) return;
-
     this.distanceCovered = 0;
     this.trackPoints = [this.mesh.position.clone()];
     this.lastPosition.copy(this.mesh.position);
-
     this.trackLine.geometry.dispose();
     this.trackLine.geometry = new BufferGeometry().setFromPoints(
       this.trackPoints
@@ -196,7 +191,6 @@ export class Player {
       this.mesh.position.y,
       targetPosition.z
     );
-
     if (!this.currentColor.equals(newColor)) {
       this.currentColor = newColor;
       this.mesh.material.color.set(newColor);
@@ -205,28 +199,26 @@ export class Player {
 
   smooth(alpha, dt) {
     const prevPos = this.mesh.position.clone();
+
     this.velocity.copy(this.targetRoot).sub(this.mesh.position);
+
     this.mesh.position.lerp(this.targetRoot, alpha);
 
     if (this.isBeingTracked && this.trackLine) {
       const distSinceLastPoint = this.mesh.position.distanceTo(
         this.lastPosition
       );
-
       if (distSinceLastPoint > MIN_TRACK_DISTANCE) {
         this.trackPoints.push(this.mesh.position.clone());
         this.lastPosition.copy(this.mesh.position);
-
         this.trackLine.geometry.dispose();
         this.trackLine.geometry = new BufferGeometry().setFromPoints(
           this.trackPoints
         );
         this.trackLine.computeLineDistances();
       }
-
       const distThisFrame = this.mesh.position.distanceTo(prevPos);
       this.distanceCovered += distThisFrame;
-
       if (dt > 0) {
         this.currentSpeed = distThisFrame / (dt / 1000);
       }
@@ -235,7 +227,6 @@ export class Player {
     if (this.isHighlighted) {
       this.highlight.rotation.y += 0.03;
     }
-
     if (this.isInterceptor) {
       this.interceptionHighlight.rotation.y -= 0.05;
     }
@@ -258,10 +249,6 @@ export class Player {
     if (this.interceptionHighlight) {
       this.interceptionHighlight.geometry.dispose();
       this.interceptionHighlight.material.dispose();
-    }
-    if (this.possessionHighlight) {
-      this.possessionHighlight.geometry.dispose();
-      this.possessionHighlight.material.dispose();
     }
     scene.remove(this.mesh);
     this.mesh.geometry.dispose();

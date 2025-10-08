@@ -22,6 +22,8 @@ import { calculateXg } from "./XgCalculator.js";
 import { LsVisualizer } from "./LsVisualizer.js";
 import { calculateLs } from "./LsCalculator.js";
 import { PathVisualizer } from "./PathVisualizer.js";
+import { calculateAllMetrics } from "./MetricCalculator.js";
+import { stageEntry } from "./DataExporterUI.js";
 
 // --- HELPER FUNCTIONS ---
 function findClosestPlayer(targetPosition, players) {
@@ -53,9 +55,7 @@ function isPointInTriangle(p, p0, p1, p2) {
     p0_2d.y * p1_2d.x +
     (p0_2d.y - p1_2d.y) * p_2d.x +
     (p1_2d.x - p0_2d.x) * p_2d.y;
-  if (s < 0 != t < 0 && s != 0 && t != 0) {
-    return false;
-  }
+  if (s < 0 != t < 0 && s != 0 && t != 0) return false;
   const A =
     -p1_2d.y * p2_2d.x +
     p0_2d.y * (p2_2d.x - p1_2d.x) +
@@ -167,6 +167,23 @@ export class TelestratorManager {
     this.previousPressuringDefenders = new Set();
     this.pitchLength = 105;
     this.pitchWidth = 68;
+    this.playbackClockRef = { value: 0 };
+    this.captureRequest = null; // Flag for requesting data capture
+  }
+
+  setPlaybackClockRef(clockRef) {
+    this.playbackClockRef = clockRef;
+  }
+
+  handleMouseUp() {
+    // The ONLY job of handleMouseUp now is to set a flag.
+    // It NO LONGER performs any calculations.
+    if (this.isDrawing && this.currentTool.startsWith("zone")) {
+      this.captureRequest = this.currentDrawing; // Flag this zone for capture
+    }
+
+    this.isDrawing = false;
+    this.currentDrawing = null;
   }
 
   setTool(tool) {
@@ -289,7 +306,6 @@ export class TelestratorManager {
         ) {
           objectToErase = objectToErase.parent;
         }
-
         if (objectToErase.userData.isHighlight) {
           const playerIdToRemove = [...this.highlights.entries()].find(
             ([id, mesh]) => mesh === objectToErase
@@ -346,6 +362,7 @@ export class TelestratorManager {
       this.currentTool === "connect-highlighted"
     )
       return;
+
     const startPoint = this.getIntersectionPoint(event);
     if (!startPoint) return;
     if (this.onDrawStart) this.onDrawStart();
@@ -468,11 +485,6 @@ export class TelestratorManager {
       line.geometry.dispose();
       line.geometry = new BufferGeometry().setFromPoints(line.userData.points);
     }
-  }
-
-  handleMouseUp() {
-    this.isDrawing = false;
-    this.currentDrawing = null;
   }
 
   undoLast() {
@@ -790,20 +802,13 @@ export class TelestratorManager {
     );
     const GOAL_WIDTH = 7.32;
     const pressuringDefenders = new Set();
-    const shooterPos_scene_vec3 = new Vector3(
-      shooterPos_scene.x,
-      0,
-      shooterPos_scene.z
-    );
-    const leftPost_vec3 = new Vector3(goalX_scene, 0, GOAL_WIDTH / 2);
-    const rightPost_vec3 = new Vector3(goalX_scene, 0, -GOAL_WIDTH / 2);
     for (const opponent of allOpponents) {
       if (
         isPointInTriangle(
           opponent.mesh.position,
-          shooterPos_scene_vec3,
-          leftPost_vec3,
-          rightPost_vec3
+          shooterPos_scene,
+          new Vector3(goalX_scene, 0, GOAL_WIDTH / 2),
+          new Vector3(goalX_scene, 0, -GOAL_WIDTH / 2)
         )
       ) {
         pressuringDefenders.add(opponent);
@@ -825,13 +830,9 @@ export class TelestratorManager {
   }
 
   updateLsVisualizer() {
-    if (!this.isLsMode) {
-      return;
-    }
-
+    if (!this.isLsMode) return;
     const zones = this.getZones();
     const targetZone = zones.length > 0 ? zones[zones.length - 1] : null;
-
     const playerInPossession = this.playerManager.playerInPossession;
 
     if (!targetZone || !playerInPossession) {
@@ -847,9 +848,10 @@ export class TelestratorManager {
     const possessionHolderPosition = playerInPossession.mesh.position;
     const attackingTeamName = playerInPossession.playerData.team;
     const homeTeamName = this.playerManager.metadata.home_team.name;
-    const awayTeamName = this.playerManager.metadata.away_team.name;
     const defendingTeamName =
-      attackingTeamName === homeTeamName ? awayTeamName : homeTeamName;
+      attackingTeamName === homeTeamName
+        ? this.playerManager.metadata.away_team.name
+        : homeTeamName;
     const attackers = this.playerManager.getAllTeamPlayers(attackingTeamName);
     const defenders = this.playerManager.getAllTeamPlayers(defendingTeamName);
 
@@ -859,8 +861,8 @@ export class TelestratorManager {
       return;
     }
 
-    // Heuristic to determine goal direction based on which half of the pitch the player is in
-    const isAttackingPositiveX = playerInPossession.mesh.position.x < 0;
+    const isAttackingPositiveX =
+      possessionHolderPosition.x < this.pitchLength / -4;
     const goalPosition = new Vector3(
       isAttackingPositiveX ? this.pitchLength / 2 : -this.pitchLength / 2,
       0,
@@ -880,10 +882,10 @@ export class TelestratorManager {
       ],
     };
 
-    let maxAngle = -1;
-    let coneCorners = [];
-    for (let i = 0; i < lq.corners.length; i++) {
-      for (let j = i + 1; j < lq.corners.length; j++) {
+    let maxAngle = -1,
+      coneCorners = [];
+    for (let i = 0; i < 4; i++) {
+      for (let j = i + 1; j < 4; j++) {
         const v1 = new Vector3().subVectors(
           lq.corners[i],
           possessionHolderPosition
@@ -947,6 +949,19 @@ export class TelestratorManager {
       if (!interceptorSet.has(p)) p.hideInterceptorHighlight();
     });
     this.previousPathInterceptors = interceptorSet;
+
+    if (this.captureRequest && targetZone === this.captureRequest) {
+      const metrics = calculateAllMetrics(
+        lq,
+        this.playerManager,
+        this.playbackClockRef.value,
+        lsValue
+      );
+      if (metrics) {
+        stageEntry(metrics);
+      }
+      this.captureRequest = null;
+    }
   }
 
   update() {
