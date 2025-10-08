@@ -4,7 +4,7 @@ import { Player } from "./Player.js";
 import { teamColors } from "./skeleton.js";
 import { Vector3 } from "three";
 
-const GRACE_PERIOD_MS = 6000;
+const GRACE_PERIOD_MS = 60000;
 const interpolatedPosition = new Vector3();
 const POSSESSION_THRESHOLD = 1.5; // Player must be within 1.5 meters of the ball to be considered in possession
 
