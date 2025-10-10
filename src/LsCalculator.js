@@ -1,14 +1,13 @@
-// FILE: src/LsCalculator.js (REPLACE ENTIRE FILE with Tune 6.0 - "The Amplifier")
+// FILE: src/LsCalculator.js (REPLACE ENTIRE FILE with Tune 11.0 - "High Volatility")
 
 import { Vector3 } from "three";
 
 /**
- * Calculates the definitive Leakage Score (LS 6.0 - "The Amplifier" Tune).
- * This version fundamentally changes the final calculation from multiplication to a
- * weighted average of Feasibility and Threat. This prevents score suppression and ensures
- * that high marks in one category contribute strongly to the final score. It also
- * re-calibrates component factors to be more generous, lifting the entire score range
- * to feel more representative of high-level opportunities.
+ * Calculates the definitive Leakage Score (LS 11.0 - "High Volatility" Tune).
+ * This version directly addresses the lack of volatility by replacing the final
+ * Math.pow smoothing curve with a high-contrast Sigmoid curve. This new curve
+ * pushes low scores closer to zero and high scores closer to one, creating a
+ * more dynamic and responsive scoring range.
  *
  * @param {object} lq - The Leakage Quadrant object.
  * @param {Vector3} carrierPosition - The 3D position of the ball carrier.
@@ -26,70 +25,76 @@ export function calculateLs(
   goalPosition,
   threatContext
 ) {
-  // --- PART 1: FEASIBILITY SCORE (Re-calibrated for higher output) ---
-
-  // RE-CALIBRATED: Sigmoid centered at 2.5m, giving players more "thinking time".
-  const pressureFactor = 1 / (1 + Math.exp(-2.5 * (pressureOnCarrier - 2.5)));
-  // RE-CALIBRATED: Slightly softer penalty for interceptors.
-  const obstructionFactor = Math.exp(-0.8 * numInterceptors);
+  // --- PART 1: FEASIBILITY SCORE (Unchanged - robust) ---
+  const pressureFactor = 1 / (1 + Math.exp(-2.0 * (pressureOnCarrier - 3.0)));
+  const obstructionFactor = Math.exp(-0.7 * numInterceptors);
   const distanceToLq = carrierPosition.distanceTo(lq.center);
-  // RE-CALIBRATED: Less punitive for longer passes.
-  const passDistFactor = Math.exp(-0.018 * distanceToLq);
+  const passDistFactor = Math.exp(-0.015 * distanceToLq);
 
   const feasibilityScore =
     obstructionFactor * 0.5 + pressureFactor * 0.35 + passDistFactor * 0.15;
 
-  // --- PART 2: THREAT SCORE (Re-calibrated for higher output) ---
-
-  // Component 2a: The Gatekeeper - Quality of Space
+  // --- PART 2: THREAT SCORE ("Tactical Awareness" Logic) ---
   const distanceToGoal = lq.center.distanceTo(goalPosition);
-  // RE-CALIBRATED: Softer distance penalty.
-  const goalDistFactor = Math.exp(-0.035 * distanceToGoal);
-  const goalAngleFactor = threatContext.lq_goal_angle_rad / (Math.PI / 2);
-  // RE-CALIBRATED: Sigmoid centered at 60m^2, rewarding medium-sized spaces more.
+  const goalDistFactor = Math.exp(-0.045 * distanceToGoal);
+
+  const linearAngleFactor = threatContext.lq_goal_angle_rad / (Math.PI / 2);
+  const goalAngleFactor = Math.pow(linearAngleFactor, 1.0);
+
+  const geographicValue = goalDistFactor * 0.9 + goalAngleFactor * 0.1;
+
   const area = threatContext.lq_area || 0;
-  const areaFactor = 1 / (1 + Math.exp(-0.05 * (area - 60)));
-  const penaltyBoxBonus = threatContext.is_lq_in_penalty_box ? 0.25 : 0;
+  const baseAreaFactor = 1 / (1 + Math.exp(-0.03 * (area - 90)));
+  const areaAmplifier = 1.0 + baseAreaFactor * 0.6;
+
+  const isPrimeZone =
+    distanceToGoal < 25 && !threatContext.is_lq_in_penalty_box;
 
   const spaceQualityScore = Math.min(
     1.0,
-    goalDistFactor * 0.45 +
-      areaFactor * 0.35 +
-      goalAngleFactor * 0.2 +
-      penaltyBoxBonus
+    geographicValue * areaAmplifier +
+      (threatContext.is_lq_in_penalty_box ? 0.25 : 0) +
+      (isPrimeZone ? 0.15 : 0)
   );
 
-  if (spaceQualityScore < 0.01) {
+  if (spaceQualityScore < 0.05) {
     return 0.0;
   }
 
-  // Component 2b: The Modifiers
   const receiverPressureFactor =
-    1 - Math.exp(-0.3 * threatContext.def_dist_closest_to_lq); // More sensitive
-  const recoveryFactor = 1 - Math.exp(-0.6 * threatContext.def_min_time_to_lq); // More sensitive
+    1 - Math.exp(-0.35 * threatContext.def_dist_closest_to_lq);
+  const recoveryFactor = 1 - Math.exp(-0.7 * threatContext.def_min_time_to_lq);
+
+  const swarmFactor = 1 / (1 + threatContext.def_num_near_lq * 0.5);
+
   const defensiveControlScore =
-    receiverPressureFactor * 0.6 + recoveryFactor * 0.4;
+    receiverPressureFactor * 0.5 + recoveryFactor * 0.3 + swarmFactor * 0.2;
 
   const overloadFactor = Math.min(1, threatContext.att_v_def_lq_radius / 2.0);
   const supportProximityFactor = Math.exp(
-    -0.07 * threatContext.dist_second_attacker_to_lq // More forgiving
+    -0.07 * threatContext.dist_second_attacker_to_lq
   );
   const attackingSupportScore =
     overloadFactor * 0.6 + supportProximityFactor * 0.4;
 
-  const exploitationModifier =
-    defensiveControlScore * 0.7 + attackingSupportScore * 0.3;
+  const apexBonus = defensiveControlScore > 0.85 ? 0.3 : 0;
+
+  const exploitationModifier = Math.min(
+    1.0,
+    defensiveControlScore * 0.6 + attackingSupportScore * 0.4 + apexBonus
+  );
 
   const threatScore = spaceQualityScore * exploitationModifier;
 
-  // --- NEW: FINAL LS 6.0 CALCULATION (Weighted Average) ---
-  // This is the core change. Instead of multiplying Feasibility and Threat, which
-  // crushes the score, we average them. An opportunity is 50% "Can we get it there?"
-  // and 50% "Is it dangerous?". This preserves the signal from high scores in either category.
-  const raw_ls = feasibilityScore * 0.5 + threatScore * 0.5;
+  // --- FINAL LS 11.0 CALCULATION (High Volatility) ---
+  const raw_ls = threatScore * feasibilityScore;
 
-  // Final scaling curve remains to provide a good "feel" and differentiate scores.
-  const final_ls = Math.pow(raw_ls, 0.7);
+  // --- NEW: High-Contrast Sigmoid Curve ---
+  // This curve replaces the old Math.pow. It aggressively pushes scores towards
+  // 0 and 1, creating the volatility you're looking for. The steepness (k=5)
+  // ensures that scores in the middle (0.4-0.6) are rapidly separated.
+  const k = 7; // Steepness of the curve. Higher k = more contrast.
+  const final_ls = 1 / (1 + Math.exp(-k * (raw_ls - 0.5)));
 
   return Math.min(1.0, final_ls);
 }
