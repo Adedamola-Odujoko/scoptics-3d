@@ -1,4 +1,4 @@
-// FILE: src/MetricCalculator.js
+// FILE: src/MetricCalculator.js (COMPLETE FILE FOR REPLACEMENT)
 
 import { Vector2, Vector3 } from "three";
 
@@ -47,13 +47,15 @@ function calculatePolygonArea(corners) {
   for (let i = 0; i < n; i++) {
     const p1 = corners[i];
     const p2 = corners[(i + 1) % n];
-    area += p1.x * p2.z - p2.x * p1.z;
+    area += p1.x * p2.z - p2.x * p1.z; // Using .z for the y-coordinate in 2D space
   }
   return Math.abs(area / 2.0);
 }
 
 /**
  * The main function to calculate all desired metrics for a single data entry.
+ * This version is aligned with LsCalculator Tune 6.0, ensuring all influential
+ * features are captured for the ML dataset.
  */
 export function calculateAllMetrics(
   lq,
@@ -66,122 +68,69 @@ export function calculateAllMetrics(
   const playerInPossession = playerManager.playerInPossession;
   if (!playerInPossession) return null;
 
-  const attackingTeamName = playerInPossession.playerData.team;
+  // --- I. CORE ENTITIES & CONTEXT ---
+  const carrierPosition = playerInPossession.mesh.position;
   const homeTeamName = playerManager.metadata.home_team.name;
+  const attackingTeamName = playerInPossession.playerData.team;
   const defendingTeamName =
     attackingTeamName === homeTeamName
       ? playerManager.metadata.away_team.name
       : homeTeamName;
 
-  const attackers = playerManager.getAllTeamPlayers(attackingTeamName);
+  const otherAttackers = playerManager
+    .getAllTeamPlayers(attackingTeamName)
+    .filter((p) => p !== playerInPossession);
   const defenders = playerManager.getAllTeamPlayers(defendingTeamName);
 
-  // --- I. CORE POSITIONAL & TEAM DATA ---
+  // --- II. PITCH GEOMETRY & GOAL (CRITICAL FOR CONTEXT) ---
+  const PITCH_LENGTH = 105;
+  const GOAL_WIDTH = 7.32;
+  const PENALTY_BOX_LENGTH = 16.5;
+  const PENALTY_BOX_WIDTH = 40.32;
+
+  // Correctly determine goal based on the inverted coordinate system
+  const isCarrierHomeTeam = attackingTeamName === homeTeamName;
+  const goalX = isCarrierHomeTeam ? -PITCH_LENGTH / 2 : PITCH_LENGTH / 2;
+  const goalPosition = new Vector3(goalX, 0, 0);
+  const goalPost1 = new Vector3(goalX, 0, GOAL_WIDTH / 2);
+  const goalPost2 = new Vector3(goalX, 0, -GOAL_WIDTH / 2);
+
+  // --- III. CORE DATA & GROUND TRUTH ---
   allMetrics.timestamp = timestamp;
-  allMetrics.player_in_possession_id = playerInPossession.playerData.id;
-  allMetrics.attacking_team = attackingTeamName;
+  allMetrics.ls_heuristic = ls_heuristic; // Our ground truth target label
+  allMetrics.attacking_team_name = attackingTeamName;
+  allMetrics.carrier_id = playerInPossession.playerData.id;
 
-  const allPlayers = Array.from(playerManager.playerMap.values());
-  for (const player of allPlayers) {
-    if (player.playerData.name === "Ball") continue;
-    const pData = player.playerData;
-    const prefix = pData.id;
-    allMetrics[`${prefix}_x`] = player.mesh.position.x;
-    allMetrics[`${prefix}_z`] = player.mesh.position.z;
-    allMetrics[`${prefix}_team`] = pData.team;
-  }
-  allMetrics["ball_x"] = playerManager.ball.mesh.position.x;
-  allMetrics["ball_z"] = playerManager.ball.mesh.position.z;
-
-  // --- II. DEFENDING TEAM STRUCTURE METRICS ---
-  const defensiveLine = playerManager
-    .getPlayersByGroup(defendingTeamName, "backline")
-    .sort((a, b) => a.mesh.position.z - b.mesh.position.z);
-  const midfieldLine = playerManager.getPlayersByGroup(
-    defendingTeamName,
-    "midfield"
-  );
-
-  if (defensiveLine.length > 1) {
-    allMetrics.def_line_width = Math.abs(
-      defensiveLine[0].mesh.position.z -
-        defensiveLine[defensiveLine.length - 1].mesh.position.z
-    );
-    allMetrics.def_line_height_avg =
-      defensiveLine.reduce((sum, p) => sum + p.mesh.position.x, 0) /
-      defensiveLine.length;
-
-    let gaps = [];
-    for (let i = 0; i < defensiveLine.length - 1; i++) {
-      gaps.push(
-        defensiveLine[i].mesh.position.distanceTo(
-          defensiveLine[i + 1].mesh.position
-        )
-      );
-    }
-    allMetrics.def_line_avg_gap = gaps.reduce((s, v) => s + v, 0) / gaps.length;
-    allMetrics.def_line_max_gap = Math.max(...gaps);
-  }
-
-  if (midfieldLine.length > 0 && defensiveLine.length > 0) {
-    const mid_avg_height =
-      midfieldLine.reduce((sum, p) => sum + p.mesh.position.x, 0) /
-      midfieldLine.length;
-    allMetrics.def_dist_between_lines = Math.abs(
-      allMetrics.def_line_height_avg - mid_avg_height
-    );
-  }
-
-  const allDefendersPos = defenders.map((p) => p.mesh.position);
-  if (allDefendersPos.length > 0) {
-    const xs = allDefendersPos.map((p) => p.x);
-    const zs = allDefendersPos.map((p) => p.z);
-    allMetrics.def_compactness_vertical = Math.max(...xs) - Math.min(...xs);
-    allMetrics.def_compactness_horizontal = Math.max(...zs) - Math.min(...zs);
-    allMetrics.def_centroid_x = xs.reduce((s, v) => s + v, 0) / xs.length;
-    allMetrics.def_centroid_z = zs.reduce((s, v) => s + v, 0) / zs.length;
-  }
-
-  // --- III. ATTACKING TEAM & EXPLOITATION POTENTIAL ---
+  // --- IV. LQ (LEAKAGE QUADRANT) FEATURES ---
   allMetrics.lq_center_x = lq.center.x;
   allMetrics.lq_center_z = lq.center.z;
-  allMetrics.lq_corner1_x = lq.corners[0].x;
-  allMetrics.lq_corner1_z = lq.corners[0].z;
-  allMetrics.lq_corner2_x = lq.corners[1].x;
-  allMetrics.lq_corner2_z = lq.corners[1].z;
-  allMetrics.lq_corner3_x = lq.corners[2].x;
-  allMetrics.lq_corner3_z = lq.corners[2].z;
-  allMetrics.lq_corner4_x = lq.corners[3].x;
-  allMetrics.lq_corner4_z = lq.corners[3].z;
-  allMetrics.ls_heuristic = ls_heuristic; // This is our ground truth target label
   allMetrics.lq_area = calculatePolygonArea(lq.corners);
+  allMetrics.dist_carrier_to_lq = carrierPosition.distanceTo(lq.center);
 
-  allMetrics.dist_carrier_to_lq = playerInPossession.mesh.position.distanceTo(
-    lq.center
-  );
+  // NEW: LQ Quality Metrics
+  const v_lq_p1 = new Vector3().subVectors(goalPost1, lq.center).normalize();
+  const v_lq_p2 = new Vector3().subVectors(goalPost2, lq.center).normalize();
+  allMetrics.lq_goal_angle_rad = v_lq_p1.angleTo(v_lq_p2);
+  allMetrics.lq_dist_to_goal = lq.center.distanceTo(goalPosition);
+  allMetrics.is_lq_in_penalty_box =
+    Math.abs(lq.center.x) > PITCH_LENGTH / 2 - PENALTY_BOX_LENGTH &&
+    Math.abs(lq.center.z) < PENALTY_BOX_WIDTH / 2
+      ? 1
+      : 0; // Boolean to 1/0
 
-  const otherAttackers = attackers.filter((p) => p !== playerInPossession);
-  const closestAttackerInfo = findClosestPlayer(lq.center, otherAttackers);
-  allMetrics.dist_closest_attacker_to_lq = closestAttackerInfo.distance;
+  // --- V. FEASIBILITY FEATURES ---
+  allMetrics.pressure_on_carrier_dist = findClosestPlayer(
+    carrierPosition,
+    defenders
+  ).distance;
 
-  const attackersNearLQ_10m = otherAttackers.filter(
-    (p) => p.mesh.position.distanceTo(lq.center) < 10
-  ).length;
-  allMetrics.num_attackers_near_lq = attackersNearLQ_10m;
-
-  // Cone calculation
-  let maxAngle = -1;
-  let coneCorners = [];
+  // Passing Cone Calculation
+  let maxAngle = -1,
+    coneCorners = [];
   for (let i = 0; i < lq.corners.length; i++) {
     for (let j = i + 1; j < lq.corners.length; j++) {
-      const v1 = new Vector3().subVectors(
-        lq.corners[i],
-        playerInPossession.mesh.position
-      );
-      const v2 = new Vector3().subVectors(
-        lq.corners[j],
-        playerInPossession.mesh.position
-      );
+      const v1 = new Vector3().subVectors(lq.corners[i], carrierPosition);
+      const v2 = new Vector3().subVectors(lq.corners[j], carrierPosition);
       const angle = v1.angleTo(v2);
       if (angle > maxAngle) {
         maxAngle = angle;
@@ -189,39 +138,63 @@ export function calculateAllMetrics(
       }
     }
   }
-  allMetrics.path_cone_angle_rad = maxAngle;
-  if (coneCorners.length > 1) {
-    const conePoints = [playerInPossession.mesh.position, ...coneCorners];
-    allMetrics.path_num_interceptors = defenders.filter((def) =>
-      isPointInTriangle(def.mesh.position, ...conePoints)
-    ).length;
-  } else {
-    allMetrics.path_num_interceptors = 0;
-  }
+  const conePoints = [carrierPosition, ...coneCorners];
+  allMetrics.path_num_interceptors =
+    conePoints.length > 2
+      ? defenders.filter((def) =>
+          isPointInTriangle(def.mesh.position, ...conePoints)
+        ).length
+      : 0;
 
-  // Off-ball runner info for the closest attacker
-  if (closestAttackerInfo.player) {
-    allMetrics.closest_attacker_speed = closestAttackerInfo.player.currentSpeed;
-    allMetrics.closest_attacker_velocity_x =
-      closestAttackerInfo.player.velocity.x;
-    allMetrics.closest_attacker_velocity_z =
-      closestAttackerInfo.player.velocity.z;
-  }
+  // --- VI. THREAT & EXPLOITATION FEATURES ---
+  const LQ_ANALYSIS_RADIUS = 8;
 
-  // --- IV. CONTEXTUAL & PLAYER-SPECIFIC ---
-  allMetrics.pressure_on_carrier_dist = findClosestPlayer(
-    playerInPossession.mesh.position,
+  // NEW: Defensive Control Metrics
+  allMetrics.def_dist_closest_to_lq = findClosestPlayer(
+    lq.center,
     defenders
   ).distance;
-  allMetrics.pressure_on_carrier_num_3m = defenders.filter(
-    (p) => p.mesh.position.distanceTo(playerInPossession.mesh.position) < 3
+  allMetrics.def_num_near_lq = defenders.filter(
+    (p) => p.mesh.position.distanceTo(lq.center) < LQ_ANALYSIS_RADIUS
   ).length;
 
-  // NOTE: Player Body Orientation is not available from the current data.
-  // We can add placeholders for future use.
-  allMetrics.carrier_orientation = null;
+  let minTimeToLq = 99;
+  if (defenders.length > 0) {
+    defenders.forEach((def) => {
+      const dist = def.mesh.position.distanceTo(lq.center);
+      const effectiveSpeed = Math.max(def.currentSpeed, 4.0);
+      const timeToLq = dist / effectiveSpeed;
+      if (timeToLq < minTimeToLq) {
+        minTimeToLq = timeToLq;
+      }
+    });
+  }
+  allMetrics.def_min_time_to_lq = minTimeToLq;
 
-  // Round all numeric values
+  // NEW: Attacking Support Metrics
+  allMetrics.num_attackers_near_lq = otherAttackers.filter(
+    (p) => p.mesh.position.distanceTo(lq.center) < LQ_ANALYSIS_RADIUS
+  ).length;
+  allMetrics.dist_second_attacker_to_lq = findClosestPlayer(
+    lq.center,
+    otherAttackers
+  ).distance;
+  allMetrics.att_v_def_lq_radius =
+    allMetrics.num_attackers_near_lq - allMetrics.def_num_near_lq;
+
+  // --- VII. RAW PLAYER POSITIONS (Optional but good practice) ---
+  const allPlayers = Array.from(playerManager.playerMap.values());
+  for (const player of allPlayers) {
+    if (player.playerData.name === "Ball") continue;
+    const pData = player.playerData;
+    const prefix = pData.id;
+    allMetrics[`${prefix}_x`] = player.mesh.position.x;
+    allMetrics[`${prefix}_z`] = player.mesh.position.z;
+  }
+  allMetrics["ball_x"] = playerManager.ball.mesh.position.x;
+  allMetrics["ball_z"] = playerManager.ball.mesh.position.z;
+
+  // Final formatting
   for (const key in allMetrics) {
     if (typeof allMetrics[key] === "number") {
       allMetrics[key] = parseFloat(allMetrics[key].toFixed(4));

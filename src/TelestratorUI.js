@@ -246,3 +246,38 @@ export function createTelestratorUI({
   document.body.appendChild(toolbar);
   cursorBtn.click();
 }
+// --- GLOBAL KEYBOARD SHORTCUTS ---
+window.addEventListener("keydown", (event) => {
+  // First, check if the user is typing in an input field, a textarea, etc.
+  // If so, we don't want to trigger any shortcuts.
+  const activeElement = document.activeElement;
+  if (
+    activeElement &&
+    (activeElement.tagName === "INPUT" ||
+      activeElement.tagName === "TEXTAREA" ||
+      activeElement.isContentEditable)
+  ) {
+    return;
+  }
+
+  // Check which key was pressed
+  switch (event.key.toLowerCase()) {
+    case "c":
+      // Find the cursor button and simulate a click on it.
+      // The '?' is optional chaining, a safe way to avoid errors if the button isn't found.
+      document.getElementById("tool-cursor")?.click();
+      break;
+
+    // You can easily add more shortcuts here in the future!
+    // For example:
+    // case 'd':
+    //   document.getElementById('tool-freehand')?.click();
+    //   break;
+    // case 'e':
+    //   document.getElementById('tool-erase')?.click();
+    //   break;
+    // case 'z':
+    //   document.getElementById('tool-zone-box')?.click();
+    //   break;
+  }
+});

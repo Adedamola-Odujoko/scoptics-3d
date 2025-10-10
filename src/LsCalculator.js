@@ -1,76 +1,95 @@
-// FILE: src/LsCalculator.js
+// FILE: src/LsCalculator.js (REPLACE ENTIRE FILE with Tune 6.0 - "The Amplifier")
 
-import { Vector2 } from "three";
+import { Vector3 } from "three";
 
-function calculatePolygonArea(corners) {
-  let area = 0;
-  const n = corners.length;
-  for (let i = 0; i < n; i++) {
-    const p1 = corners[i];
-    const p2 = corners[(i + 1) % n];
-    area += p1.x * p2.y - p2.x * p1.y;
-  }
-  return Math.abs(area / 2.0);
-}
-
+/**
+ * Calculates the definitive Leakage Score (LS 6.0 - "The Amplifier" Tune).
+ * This version fundamentally changes the final calculation from multiplication to a
+ * weighted average of Feasibility and Threat. This prevents score suppression and ensures
+ * that high marks in one category contribute strongly to the final score. It also
+ * re-calibrates component factors to be more generous, lifting the entire score range
+ * to feel more representative of high-level opportunities.
+ *
+ * @param {object} lq - The Leakage Quadrant object.
+ * @param {Vector3} carrierPosition - The 3D position of the ball carrier.
+ * @param {number} pressureOnCarrier - Distance to the nearest defender from the carrier.
+ * @param {number} numInterceptors - Number of defenders in the passing cone.
+ * @param {Vector3} goalPosition - The 3D position of the center of the goal.
+ * @param {object} threatContext - A comprehensive object with all post-reception metrics.
+ * @returns {number} The final Leakage Score from 0.0 to 1.0.
+ */
 export function calculateLs(
   lq,
+  carrierPosition,
   pressureOnCarrier,
   numInterceptors,
-  receiverInfo,
-  goalPosition
+  goalPosition,
+  threatContext
 ) {
-  // --- 1. Space Quality Factors ---
-  const areaOfLQ = calculatePolygonArea(
-    lq.corners.map((c) => new Vector2(c.x, c.z))
-  );
+  // --- PART 1: FEASIBILITY SCORE (Re-calibrated for higher output) ---
+
+  // RE-CALIBRATED: Sigmoid centered at 2.5m, giving players more "thinking time".
+  const pressureFactor = 1 / (1 + Math.exp(-2.5 * (pressureOnCarrier - 2.5)));
+  // RE-CALIBRATED: Slightly softer penalty for interceptors.
+  const obstructionFactor = Math.exp(-0.8 * numInterceptors);
+  const distanceToLq = carrierPosition.distanceTo(lq.center);
+  // RE-CALIBRATED: Less punitive for longer passes.
+  const passDistFactor = Math.exp(-0.018 * distanceToLq);
+
+  const feasibilityScore =
+    obstructionFactor * 0.5 + pressureFactor * 0.35 + passDistFactor * 0.15;
+
+  // --- PART 2: THREAT SCORE (Re-calibrated for higher output) ---
+
+  // Component 2a: The Gatekeeper - Quality of Space
   const distanceToGoal = lq.center.distanceTo(goalPosition);
-  if (distanceToGoal < 1) return 1.0;
+  // RE-CALIBRATED: Softer distance penalty.
+  const goalDistFactor = Math.exp(-0.035 * distanceToGoal);
+  const goalAngleFactor = threatContext.lq_goal_angle_rad / (Math.PI / 2);
+  // RE-CALIBRATED: Sigmoid centered at 60m^2, rewarding medium-sized spaces more.
+  const area = threatContext.lq_area || 0;
+  const areaFactor = 1 / (1 + Math.exp(-0.05 * (area - 60)));
+  const penaltyBoxBonus = threatContext.is_lq_in_penalty_box ? 0.25 : 0;
 
-  // --- 2. Exploitation Potential (Payoff) ---
-  if (!receiverInfo.player) return 0.0;
+  const spaceQualityScore = Math.min(
+    1.0,
+    goalDistFactor * 0.45 +
+      areaFactor * 0.35 +
+      goalAngleFactor * 0.2 +
+      penaltyBoxBonus
+  );
 
-  // --- 3. TRANSFORM THE AREA VARIABLE (This is essential) ---
-  const transformedArea = Math.sqrt(areaOfLQ);
+  if (spaceQualityScore < 0.01) {
+    return 0.0;
+  }
 
-  // --- 4. "BALANCED" WEIGHTS ---
-  // We're making the base score less punishing and reducing the defender penalty slightly.
-  const weights = {
-    area: 0.12, // Slightly increased reward for space
-    goal_dist: 0.2, // Proximity to goal remains very important
-    carrier_pressure: 0.05, // Carrier having space is a moderate bonus
-    path_clear: -0.7, // Strong, but not overwhelming, penalty for each defender
-    receiver_prox: 1.3, // Strong reward for having a teammate ready to receive
-    intercept: -1.0, // **MODERATED** negative base intercept. This is the key change.
-  };
+  // Component 2b: The Modifiers
+  const receiverPressureFactor =
+    1 - Math.exp(-0.3 * threatContext.def_dist_closest_to_lq); // More sensitive
+  const recoveryFactor = 1 - Math.exp(-0.6 * threatContext.def_min_time_to_lq); // More sensitive
+  const defensiveControlScore =
+    receiverPressureFactor * 0.6 + recoveryFactor * 0.4;
 
-  const receiverProximityFactor = 1 / Math.max(receiverInfo.distance, 1.0);
+  const overloadFactor = Math.min(1, threatContext.att_v_def_lq_radius / 2.0);
+  const supportProximityFactor = Math.exp(
+    -0.07 * threatContext.dist_second_attacker_to_lq // More forgiving
+  );
+  const attackingSupportScore =
+    overloadFactor * 0.6 + supportProximityFactor * 0.4;
 
-  const z =
-    weights.intercept +
-    weights.area * transformedArea +
-    weights.goal_dist * (1 / distanceToGoal) +
-    weights.carrier_pressure * pressureOnCarrier +
-    weights.path_clear * numInterceptors +
-    weights.receiver_prox * receiverProximityFactor;
+  const exploitationModifier =
+    defensiveControlScore * 0.7 + attackingSupportScore * 0.3;
 
-  // --- DEBUGGING: Uncomment this to see the new, balanced contributions ---
+  const threatScore = spaceQualityScore * exploitationModifier;
 
-  console.log({
-    z_final: z.toFixed(2),
-    ls_score: (1 / (1 + Math.exp(-z))).toFixed(2),
-    Intercept: weights.intercept,
-    "Area (Transformed)": (weights.area * transformedArea).toFixed(2),
-    "Goal Prox": (weights.goal_dist * (1 / distanceToGoal)).toFixed(2),
-    "Carrier Freedom": (weights.carrier_pressure * pressureOnCarrier).toFixed(
-      2
-    ),
-    "Path Obstruction": (weights.path_clear * numInterceptors).toFixed(2),
-    "Receiver Prox": (weights.receiver_prox * receiverProximityFactor).toFixed(
-      2
-    ),
-  });
+  // --- NEW: FINAL LS 6.0 CALCULATION (Weighted Average) ---
+  // This is the core change. Instead of multiplying Feasibility and Threat, which
+  // crushes the score, we average them. An opportunity is 50% "Can we get it there?"
+  // and 50% "Is it dangerous?". This preserves the signal from high scores in either category.
+  const raw_ls = feasibilityScore * 0.5 + threatScore * 0.5;
 
-  const ls = 1 / (1 + Math.exp(-z));
-  return ls;
+  // Final scaling curve remains to provide a good "feel" and differentiate scores.
+  const final_ls = Math.pow(raw_ls, 0.7);
+
+  return Math.min(1.0, final_ls);
 }

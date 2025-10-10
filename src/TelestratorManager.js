@@ -1,4 +1,4 @@
-// FILE: src/TelestratorManager.js
+// FILE: src/TelestratorManager.js (COMPLETE FILE FOR REPLACEMENT)
 
 import {
   Raycaster,
@@ -828,6 +828,7 @@ export class TelestratorManager {
     };
     this.xgVisualizer.update(shooterPos_scene, goalPosts_scene, xgValue);
   }
+  // FILE: src/TelestratorManager.js (REPLACE THE 'updateLsVisualizer' FUNCTION)
 
   updateLsVisualizer() {
     if (!this.isLsMode) return;
@@ -845,30 +846,41 @@ export class TelestratorManager {
       return;
     }
 
-    const possessionHolderPosition = playerInPossession.mesh.position;
+    // --- 1. GATHER CORE ENTITIES & CONTEXT ---
+    const carrierPosition = playerInPossession.mesh.position;
     const attackingTeamName = playerInPossession.playerData.team;
     const homeTeamName = this.playerManager.metadata.home_team.name;
     const defendingTeamName =
       attackingTeamName === homeTeamName
         ? this.playerManager.metadata.away_team.name
         : homeTeamName;
-    const attackers = this.playerManager.getAllTeamPlayers(attackingTeamName);
+
+    const otherAttackers = this.playerManager
+      .getAllTeamPlayers(attackingTeamName)
+      .filter((p) => p !== playerInPossession);
     const defenders = this.playerManager.getAllTeamPlayers(defendingTeamName);
 
-    if (attackers.length === 0) {
-      this.lsVisualizer.update(targetZone, 0.0);
-      this.pathVisualizer.setVisible(false);
-      return;
-    }
+    // --- 2. DEFINE PITCH GEOMETRY & GOAL (DEFINITIVE FIX) ---
+    const PITCH_LENGTH = 105;
+    const PITCH_WIDTH = 68;
+    const GOAL_WIDTH = 7.32;
+    const PENALTY_BOX_LENGTH = 16.5;
+    const PENALTY_BOX_WIDTH = 40.32;
 
-    const isAttackingPositiveX =
-      possessionHolderPosition.x < this.pitchLength / -4;
-    const goalPosition = new Vector3(
-      isAttackingPositiveX ? this.pitchLength / 2 : -this.pitchLength / 2,
-      0,
-      0
-    );
+    // --- THE DEFINITIVE FIX ---
+    // The X-axis was inverted in MatchDataLoader. We MUST invert our goal logic to match.
+    // In our application's coordinate space:
+    // - Home Team attacks the NEGATIVE X goal.
+    // - Away Team attacks the POSITIVE X goal.
+    const carrierTeamName = playerInPossession.playerData.team;
+    const isCarrierHomeTeam = carrierTeamName === homeTeamName;
+    const goalX = isCarrierHomeTeam ? -PITCH_LENGTH / 2 : PITCH_LENGTH / 2; // <-- THIS IS THE CORRECTED LINE
 
+    const goalPosition = new Vector3(goalX, 0, 0);
+    const goalPost1 = new Vector3(goalX, 0, GOAL_WIDTH / 2);
+    const goalPost2 = new Vector3(goalX, 0, -GOAL_WIDTH / 2);
+
+    // --- 3. DEFINE THE LEAKAGE QUADRANT (LQ) ---
     const center = targetZone.position;
     const halfWidth = targetZone.scale.x / 2;
     const halfDepth = targetZone.scale.y / 2;
@@ -882,18 +894,19 @@ export class TelestratorManager {
       ],
     };
 
+    // --- 4. CALCULATE FEASIBILITY METRICS ---
+    const pressureOnCarrier = findClosestPlayer(
+      carrierPosition,
+      defenders
+    ).distance;
+
+    // Calculate passing cone and interceptors
     let maxAngle = -1,
       coneCorners = [];
     for (let i = 0; i < 4; i++) {
       for (let j = i + 1; j < 4; j++) {
-        const v1 = new Vector3().subVectors(
-          lq.corners[i],
-          possessionHolderPosition
-        );
-        const v2 = new Vector3().subVectors(
-          lq.corners[j],
-          possessionHolderPosition
-        );
+        const v1 = new Vector3().subVectors(lq.corners[i], carrierPosition);
+        const v2 = new Vector3().subVectors(lq.corners[j], carrierPosition);
         const angle = v1.angleTo(v2);
         if (angle > maxAngle) {
           maxAngle = angle;
@@ -901,46 +914,91 @@ export class TelestratorManager {
         }
       }
     }
-    if (coneCorners.length < 2) return;
+    const sortedConeCorners =
+      coneCorners.length > 1 ? coneCorners.sort((a, b) => a.z - b.z) : [];
+    const conePoints = [carrierPosition, ...sortedConeCorners];
+    const numInterceptors =
+      conePoints.length > 2
+        ? defenders.filter((def) =>
+            isPointInTriangle(def.mesh.position, ...conePoints)
+          ).length
+        : 0;
 
-    const sortedConeCorners = coneCorners.sort((a, b) => a.z - b.z);
-    const conePoints = [possessionHolderPosition, ...sortedConeCorners];
-    const currentPathInterceptors = defenders.filter((def) =>
-      isPointInTriangle(def.mesh.position, ...conePoints)
-    );
+    // --- 5. BUILD THE 'threatContext' OBJECT ---
+    const threatContext = {};
+    const LQ_ANALYSIS_RADIUS = 8; // 8m radius around the LQ center for counting players
 
-    const bestReceiverInfo = findClosestPlayer(lq.center, attackers);
-    const pressureOnCarrier = findClosestPlayer(
-      possessionHolderPosition,
-      defenders
-    ).distance;
+    // 5a. LQ Quality
+    const v_lq_p1 = new Vector3().subVectors(goalPost1, lq.center).normalize();
+    const v_lq_p2 = new Vector3().subVectors(goalPost2, lq.center).normalize();
+    threatContext.lq_goal_angle_rad = v_lq_p1.angleTo(v_lq_p2);
+    threatContext.is_lq_in_penalty_box =
+      Math.abs(lq.center.x) > PITCH_LENGTH / 2 - PENALTY_BOX_LENGTH &&
+      Math.abs(lq.center.z) < PENALTY_BOX_WIDTH / 2;
+    threatContext.lq_area = calculatePolygonArea(lq.corners);
+
+    // 5b. Defensive Pressure around LQ
+    const closestDefenderToLq = findClosestPlayer(lq.center, defenders);
+    threatContext.def_dist_closest_to_lq = closestDefenderToLq.distance;
+    threatContext.def_num_near_lq = defenders.filter(
+      (p) => p.mesh.position.distanceTo(lq.center) < LQ_ANALYSIS_RADIUS
+    ).length;
+
+    let minTimeToLq = 99; // Start with a high number
+    if (defenders.length > 0) {
+      defenders.forEach((def) => {
+        const dist = def.mesh.position.distanceTo(lq.center);
+        let timeToLq;
+        // Use a realistic top speed (e.g., 9 m/s) if player is slow/stationary to estimate recovery
+        const effectiveSpeed = Math.max(def.currentSpeed, 4.0);
+        timeToLq = dist / effectiveSpeed;
+
+        if (timeToLq < minTimeToLq) {
+          minTimeToLq = timeToLq;
+        }
+      });
+    }
+    threatContext.def_min_time_to_lq = minTimeToLq;
+
+    // 5c. Attacking Support around LQ
+    threatContext.num_attackers_near_lq = otherAttackers.filter(
+      (p) => p.mesh.position.distanceTo(lq.center) < LQ_ANALYSIS_RADIUS
+    ).length;
+    threatContext.att_v_def_lq_radius =
+      threatContext.num_attackers_near_lq - threatContext.def_num_near_lq;
+
+    const secondAttackerInfo = findClosestPlayer(lq.center, otherAttackers);
+    threatContext.dist_second_attacker_to_lq = secondAttackerInfo.distance;
+
+    // --- 6. CALCULATE FINAL LS SCORE ---
     const lsValue = calculateLs(
       lq,
+      carrierPosition,
       pressureOnCarrier,
-      currentPathInterceptors.length,
-      bestReceiverInfo,
-      goalPosition
+      numInterceptors,
+      goalPosition,
+      threatContext
     );
 
+    // --- 7. UPDATE VISUALIZERS ---
     const distanceFactor = Math.max(
       0,
-      1 - possessionHolderPosition.distanceTo(lq.center) / 40
+      1 - carrierPosition.distanceTo(lq.center) / 40
     );
     const pressureFactor = Math.min(1, pressureOnCarrier / 10);
-    const obstructionFactor = Math.max(
-      0,
-      1 - currentPathInterceptors.length * 0.5
-    );
+    const obstructionFactor = Math.max(0, 1 - numInterceptors * 0.5);
     const pathScore =
       distanceFactor * 0.4 + pressureFactor * 0.2 + obstructionFactor * 0.4;
 
     this.lsVisualizer.update(targetZone, lsValue);
-    this.pathVisualizer.update(
-      possessionHolderPosition,
-      sortedConeCorners,
-      pathScore
-    );
+    this.pathVisualizer.update(carrierPosition, sortedConeCorners, pathScore);
 
+    const currentPathInterceptors =
+      conePoints.length > 2
+        ? defenders.filter((def) =>
+            isPointInTriangle(def.mesh.position, ...conePoints)
+          )
+        : [];
     const interceptorSet = new Set(currentPathInterceptors);
     interceptorSet.forEach((p) => {
       if (!this.previousPathInterceptors.has(p)) p.showInterceptorHighlight();
@@ -950,6 +1008,7 @@ export class TelestratorManager {
     });
     this.previousPathInterceptors = interceptorSet;
 
+    // --- 8. STAGE DATA FOR EXPORT (IF REQUESTED) ---
     if (this.captureRequest && targetZone === this.captureRequest) {
       const metrics = calculateAllMetrics(
         lq,
@@ -963,7 +1022,6 @@ export class TelestratorManager {
       this.captureRequest = null;
     }
   }
-
   update() {
     for (const [playerId, highlightMesh] of this.highlights.entries()) {
       const player = this.playerManager.playerMap.get(playerId);
