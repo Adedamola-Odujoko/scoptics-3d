@@ -129,7 +129,8 @@ export class TelestratorManager {
     groundPlane,
     playerManager,
     labelRenderer,
-    { onDrawStart }
+    { onDrawStart },
+    xTGridData
   ) {
     this.scene = scene;
     this.camera = camera;
@@ -168,7 +169,39 @@ export class TelestratorManager {
     this.pitchLength = 105;
     this.pitchWidth = 68;
     this.playbackClockRef = { value: 0 };
-    this.captureRequest = null; // Flag for requesting data capture
+    this.captureRequest = null;
+    this.xTGridData = xTGridData; // Flag for requesting data capture
+  }
+
+  getXtValue(position) {
+    if (!this.xTGridData || !this.xTGridData.data) {
+      return 0.0; // Return a neutral value if data isn't loaded
+    }
+
+    const [gridRows, gridCols] = this.xTGridData.grid_size;
+
+    // xT grids are defined for a non-inverted pitch (attacking +X).
+    // Our app's coordinates are inverted. We must re-invert the lookup
+    // position to match the grid's coordinate system.
+    const lookupX = -position.x;
+
+    // Convert world coordinates to a 0-1 percentage
+    const x_percent = (lookupX + this.pitchLength / 2) / this.pitchLength;
+    const z_percent = (position.z + this.pitchWidth / 2) / this.pitchWidth;
+
+    // Convert percentage to grid index
+    const rowIndex = Math.floor(x_percent * gridRows);
+    const colIndex = Math.floor(z_percent * gridCols);
+
+    // Clamp values to be within the grid bounds
+    const clampedRow = Math.max(0, Math.min(gridRows - 1, rowIndex));
+    const clampedCol = Math.max(0, Math.min(gridCols - 1, colIndex));
+
+    const index = clampedRow * gridCols + clampedCol;
+
+    // Normalize the xT value (our mock data max is ~0.3)
+    const rawXt = this.xTGridData.data[index] || 0.0;
+    return Math.min(1.0, rawXt / 0.4); // Normalize to a ~0-1 range for our calculator
   }
 
   setPlaybackClockRef(clockRef) {
@@ -836,6 +869,7 @@ export class TelestratorManager {
     const targetZone = zones.length > 0 ? zones[zones.length - 1] : null;
     const playerInPossession = this.playerManager.playerInPossession;
 
+    // If we don't have a zone drawn or a player in possession, hide visuals and exit.
     if (!targetZone || !playerInPossession) {
       this.lsVisualizer.setVisible(false);
       this.pathVisualizer.setVisible(false);
@@ -847,8 +881,9 @@ export class TelestratorManager {
     }
 
     // --- 1. GATHER CORE ENTITIES & CONTEXT ---
-    const carrierPosition = playerInPossession.mesh.position;
-    const attackingTeamName = playerInPossession.playerData.team;
+    const carrier = playerInPossession;
+    const carrierPosition = carrier.mesh.position;
+    const attackingTeamName = carrier.playerData.team;
     const homeTeamName = this.playerManager.metadata.home_team.name;
     const defendingTeamName =
       attackingTeamName === homeTeamName
@@ -857,50 +892,50 @@ export class TelestratorManager {
 
     const otherAttackers = this.playerManager
       .getAllTeamPlayers(attackingTeamName)
-      .filter((p) => p !== playerInPossession);
+      .filter((p) => p !== carrier);
     const defenders = this.playerManager.getAllTeamPlayers(defendingTeamName);
 
-    // --- 2. DEFINE PITCH GEOMETRY & GOAL (DEFINITIVE FIX) ---
+    // --- 2. DEFINE PITCH GEOMETRY & GOAL ---
     const PITCH_LENGTH = 105;
-    const PITCH_WIDTH = 68;
     const GOAL_WIDTH = 7.32;
-    const PENALTY_BOX_LENGTH = 16.5;
-    const PENALTY_BOX_WIDTH = 40.32;
 
-    // --- THE DEFINITIVE FIX ---
-    // The X-axis was inverted in MatchDataLoader. We MUST invert our goal logic to match.
-    // In our application's coordinate space:
-    // - Home Team attacks the NEGATIVE X goal.
-    // - Away Team attacks the POSITIVE X goal.
-    const carrierTeamName = playerInPossession.playerData.team;
-    const isCarrierHomeTeam = carrierTeamName === homeTeamName;
-    const goalX = isCarrierHomeTeam ? -PITCH_LENGTH / 2 : PITCH_LENGTH / 2; // <-- THIS IS THE CORRECTED LINE
+    const isCarrierHomeTeam = carrier.playerData.team === homeTeamName;
+    const goalX = isCarrierHomeTeam ? -PITCH_LENGTH / 2 : PITCH_LENGTH / 2;
 
-    const goalPosition = new Vector3(goalX, 0, 0);
-    const goalPost1 = new Vector3(goalX, 0, GOAL_WIDTH / 2);
-    const goalPost2 = new Vector3(goalX, 0, -GOAL_WIDTH / 2);
+    const goal = {
+      position: new Vector3(goalX, 0, 0),
+      post1: new Vector3(goalX, 0, GOAL_WIDTH / 2),
+      post2: new Vector3(goalX, 0, -GOAL_WIDTH / 2),
+    };
 
     // --- 3. DEFINE THE LEAKAGE QUADRANT (LQ) ---
     const center = targetZone.position;
     const halfWidth = targetZone.scale.x / 2;
     const halfDepth = targetZone.scale.y / 2;
+    const lqCorners = [
+      new Vector3(center.x - halfWidth, Y_OFFSET, center.z - halfDepth),
+      new Vector3(center.x + halfWidth, Y_OFFSET, center.z - halfDepth),
+      new Vector3(center.x + halfWidth, Y_OFFSET, center.z + halfDepth),
+      new Vector3(center.x - halfWidth, Y_OFFSET, center.z + halfDepth),
+    ];
     const lq = {
       center: center.clone(),
-      corners: [
-        new Vector3(center.x - halfWidth, Y_OFFSET, center.z - halfDepth),
-        new Vector3(center.x + halfWidth, Y_OFFSET, center.z - halfDepth),
-        new Vector3(center.x + halfWidth, Y_OFFSET, center.z + halfDepth),
-        new Vector3(center.x - halfWidth, Y_OFFSET, center.z + halfDepth),
-      ],
+      corners: lqCorners,
+      area: calculatePolygonArea(lqCorners), // Pre-calculate area for the calculator
     };
 
-    // --- 4. CALCULATE FEASIBILITY METRICS ---
-    const pressureOnCarrier = findClosestPlayer(
-      carrierPosition,
-      defenders
-    ).distance;
+    // --- 4. CALCULATE THE LEAKAGE SCORE (NEW HIERARCHICAL MODEL) ---
+    // This single function call replaces all the previous manual context building.
+    const { final_ls, feasibilityScore } = calculateLs(
+      lq,
+      carrier,
+      defenders,
+      otherAttackers,
+      goal
+    );
 
-    // Calculate passing cone and interceptors
+    // --- 5. CALCULATE GEOMETRIES REQUIRED FOR VISUALIZERS ---
+    // This is needed for the path cone and interceptor highlighting.
     let maxAngle = -1,
       coneCorners = [];
     for (let i = 0; i < 4; i++) {
@@ -917,82 +952,17 @@ export class TelestratorManager {
     const sortedConeCorners =
       coneCorners.length > 1 ? coneCorners.sort((a, b) => a.z - b.z) : [];
     const conePoints = [carrierPosition, ...sortedConeCorners];
-    const numInterceptors =
-      conePoints.length > 2
-        ? defenders.filter((def) =>
-            isPointInTriangle(def.mesh.position, ...conePoints)
-          ).length
-        : 0;
 
-    // --- 5. BUILD THE 'threatContext' OBJECT ---
-    const threatContext = {};
-    const LQ_ANALYSIS_RADIUS = 8; // 8m radius around the LQ center for counting players
-
-    // 5a. LQ Quality
-    const v_lq_p1 = new Vector3().subVectors(goalPost1, lq.center).normalize();
-    const v_lq_p2 = new Vector3().subVectors(goalPost2, lq.center).normalize();
-    threatContext.lq_goal_angle_rad = v_lq_p1.angleTo(v_lq_p2);
-    threatContext.is_lq_in_penalty_box =
-      Math.abs(lq.center.x) > PITCH_LENGTH / 2 - PENALTY_BOX_LENGTH &&
-      Math.abs(lq.center.z) < PENALTY_BOX_WIDTH / 2;
-    threatContext.lq_area = calculatePolygonArea(lq.corners);
-
-    // 5b. Defensive Pressure around LQ
-    const closestDefenderToLq = findClosestPlayer(lq.center, defenders);
-    threatContext.def_dist_closest_to_lq = closestDefenderToLq.distance;
-    threatContext.def_num_near_lq = defenders.filter(
-      (p) => p.mesh.position.distanceTo(lq.center) < LQ_ANALYSIS_RADIUS
-    ).length;
-
-    let minTimeToLq = 99; // Start with a high number
-    if (defenders.length > 0) {
-      defenders.forEach((def) => {
-        const dist = def.mesh.position.distanceTo(lq.center);
-        let timeToLq;
-        // Use a realistic top speed (e.g., 9 m/s) if player is slow/stationary to estimate recovery
-        const effectiveSpeed = Math.max(def.currentSpeed, 4.0);
-        timeToLq = dist / effectiveSpeed;
-
-        if (timeToLq < minTimeToLq) {
-          minTimeToLq = timeToLq;
-        }
-      });
-    }
-    threatContext.def_min_time_to_lq = minTimeToLq;
-
-    // 5c. Attacking Support around LQ
-    threatContext.num_attackers_near_lq = otherAttackers.filter(
-      (p) => p.mesh.position.distanceTo(lq.center) < LQ_ANALYSIS_RADIUS
-    ).length;
-    threatContext.att_v_def_lq_radius =
-      threatContext.num_attackers_near_lq - threatContext.def_num_near_lq;
-
-    const secondAttackerInfo = findClosestPlayer(lq.center, otherAttackers);
-    threatContext.dist_second_attacker_to_lq = secondAttackerInfo.distance;
-
-    // --- 6. CALCULATE FINAL LS SCORE ---
-    const lsValue = calculateLs(
-      lq,
+    // --- 6. UPDATE VISUALIZERS ---
+    this.lsVisualizer.update(targetZone, final_ls);
+    // Use the feasibility score returned directly from the new calculator for the path color.
+    this.pathVisualizer.update(
       carrierPosition,
-      pressureOnCarrier,
-      numInterceptors,
-      goalPosition,
-      threatContext
+      sortedConeCorners,
+      feasibilityScore
     );
 
-    // --- 7. UPDATE VISUALIZERS ---
-    const distanceFactor = Math.max(
-      0,
-      1 - carrierPosition.distanceTo(lq.center) / 40
-    );
-    const pressureFactor = Math.min(1, pressureOnCarrier / 10);
-    const obstructionFactor = Math.max(0, 1 - numInterceptors * 0.5);
-    const pathScore =
-      distanceFactor * 0.4 + pressureFactor * 0.2 + obstructionFactor * 0.4;
-
-    this.lsVisualizer.update(targetZone, lsValue);
-    this.pathVisualizer.update(carrierPosition, sortedConeCorners, pathScore);
-
+    // Update interceptor highlights based on the passing cone.
     const currentPathInterceptors =
       conePoints.length > 2
         ? defenders.filter((def) =>
@@ -1008,18 +978,18 @@ export class TelestratorManager {
     });
     this.previousPathInterceptors = interceptorSet;
 
-    // --- 8. STAGE DATA FOR EXPORT (IF REQUESTED) ---
+    // --- 7. STAGE DATA FOR EXPORT (IF REQUESTED) ---
     if (this.captureRequest && targetZone === this.captureRequest) {
       const metrics = calculateAllMetrics(
         lq,
         this.playerManager,
         this.playbackClockRef.value,
-        lsValue
+        final_ls // Use the final LS from the new calculator as the ground truth
       );
       if (metrics) {
         stageEntry(metrics);
       }
-      this.captureRequest = null;
+      this.captureRequest = null; // Reset the request flag
     }
   }
   update() {

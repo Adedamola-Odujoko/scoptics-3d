@@ -1,4 +1,4 @@
-// FILE: src/main.js
+// FILE: src/main.js (COMPLETE FILE FOR REPLACEMENT)
 
 import {
   Scene,
@@ -27,6 +27,9 @@ import { TelestratorManager } from "./TelestratorManager.js";
 import { createStatsUI, updateStats } from "./StatsUI.js";
 import { HandController } from "./handController.js";
 import { createDataExporterUI } from "./DataExporterUI.js";
+
+// Global variable to hold the loaded Expected Threat data
+let xTGridData = null;
 
 function createControlsUI() {
   const ctrl = document.createElement("div");
@@ -173,6 +176,20 @@ async function main() {
     loadingOverlay.style.opacity = 1;
   }
 
+  // --- ADDED: Load the Expected Threat (xT) data at startup ---
+  try {
+    const response = await fetch("/xT_grid.json");
+    if (!response.ok) throw new Error("Failed to load xT grid");
+    xTGridData = await response.json();
+    console.log("✅ Successfully loaded Expected Threat (xT) grid.");
+  } catch (error) {
+    console.error(
+      "Could not load xT grid. Threat model will default to heuristic.",
+      error
+    );
+  }
+  // --- END OF ADDED BLOCK ---
+
   const loader = new MatchDataLoader(
     "/match_metadata.json",
     "/structured_data.json"
@@ -267,6 +284,7 @@ async function main() {
   };
   const playerManager = new PlayerManager(scene, teamColorMap, metadata);
 
+  // --- MODIFIED: Pass the xTGridData to the TelestratorManager ---
   const telestratorManager = new TelestratorManager(
     scene,
     camera,
@@ -280,7 +298,8 @@ async function main() {
           ui.playBtn.innerText = "Play ▶";
         }
       },
-    }
+    },
+    xTGridData // <-- Pass the loaded data here
   );
 
   createDataExporterUI();

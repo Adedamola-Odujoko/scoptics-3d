@@ -1,60 +1,13 @@
-// FILE: src/MetricCalculator.js (COMPLETE FILE FOR REPLACEMENT)
-
-import { Vector2, Vector3 } from "three";
-
-// --- HELPER FUNCTIONS ---
-function findClosestPlayer(targetPosition, players) {
-  let closestPlayer = null;
-  let minDistance = Infinity;
-  for (const player of players) {
-    if (!player || !player.mesh) continue;
-    const distance = player.mesh.position.distanceTo(targetPosition);
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestPlayer = player;
-    }
-  }
-  return { player: closestPlayer, distance: minDistance };
-}
-
-function isPointInTriangle(p, p0, p1, p2) {
-  const p_2d = new Vector2(p.x, p.z);
-  const p0_2d = new Vector2(p0.x, p0.z);
-  const p1_2d = new Vector2(p1.x, p1.z);
-  const p2_2d = new Vector2(p2.x, p2.z);
-  const s =
-    p0_2d.y * p2_2d.x -
-    p0_2d.x * p2_2d.y +
-    (p2_2d.y - p0_2d.y) * p_2d.x +
-    (p0_2d.x - p2_2d.x) * p_2d.y;
-  const t =
-    p0_2d.x * p1_2d.y -
-    p0_2d.y * p1_2d.x +
-    (p0_2d.y - p1_2d.y) * p_2d.x +
-    (p1_2d.x - p0_2d.x) * p_2d.y;
-  if (s < 0 != t < 0 && s != 0 && t != 0) return false;
-  const A =
-    -p1_2d.y * p2_2d.x +
-    p0_2d.y * (p2_2d.x - p1_2d.x) +
-    p0_2d.x * (p1_2d.y - p2_2d.y) +
-    p1_2d.x * p2_2d.y;
-  return A < 0 ? s <= 0 && s + t >= A : s >= 0 && s + t <= A;
-}
-
-function calculatePolygonArea(corners) {
-  let area = 0;
-  const n = corners.length;
-  for (let i = 0; i < n; i++) {
-    const p1 = corners[i];
-    const p2 = corners[(i + 1) % n];
-    area += p1.x * p2.z - p2.x * p1.z; // Using .z for the y-coordinate in 2D space
-  }
-  return Math.abs(area / 2.0);
-}
+import { Vector3 } from "three";
+import {
+  findClosestPlayer,
+  isPointInTriangle,
+  calculatePolygonArea,
+} from "./utils.js"; // <-- CORRECT: Import from utils
 
 /**
  * The main function to calculate all desired metrics for a single data entry.
- * This version is aligned with LsCalculator Tune 6.0, ensuring all influential
+ * This is aligned with the latest LS Calculator model, ensuring all influential
  * features are captured for the ML dataset.
  */
 export function calculateAllMetrics(
@@ -88,7 +41,6 @@ export function calculateAllMetrics(
   const PENALTY_BOX_LENGTH = 16.5;
   const PENALTY_BOX_WIDTH = 40.32;
 
-  // Correctly determine goal based on the inverted coordinate system
   const isCarrierHomeTeam = attackingTeamName === homeTeamName;
   const goalX = isCarrierHomeTeam ? -PITCH_LENGTH / 2 : PITCH_LENGTH / 2;
   const goalPosition = new Vector3(goalX, 0, 0);
@@ -104,10 +56,9 @@ export function calculateAllMetrics(
   // --- IV. LQ (LEAKAGE QUADRANT) FEATURES ---
   allMetrics.lq_center_x = lq.center.x;
   allMetrics.lq_center_z = lq.center.z;
-  allMetrics.lq_area = calculatePolygonArea(lq.corners);
+  allMetrics.lq_area = lq.area; // Use pre-calculated area from Telestrator
   allMetrics.dist_carrier_to_lq = carrierPosition.distanceTo(lq.center);
 
-  // NEW: LQ Quality Metrics
   const v_lq_p1 = new Vector3().subVectors(goalPost1, lq.center).normalize();
   const v_lq_p2 = new Vector3().subVectors(goalPost2, lq.center).normalize();
   allMetrics.lq_goal_angle_rad = v_lq_p1.angleTo(v_lq_p2);
@@ -116,7 +67,7 @@ export function calculateAllMetrics(
     Math.abs(lq.center.x) > PITCH_LENGTH / 2 - PENALTY_BOX_LENGTH &&
     Math.abs(lq.center.z) < PENALTY_BOX_WIDTH / 2
       ? 1
-      : 0; // Boolean to 1/0
+      : 0;
 
   // --- V. FEASIBILITY FEATURES ---
   allMetrics.pressure_on_carrier_dist = findClosestPlayer(
@@ -124,7 +75,6 @@ export function calculateAllMetrics(
     defenders
   ).distance;
 
-  // Passing Cone Calculation
   let maxAngle = -1,
     coneCorners = [];
   for (let i = 0; i < lq.corners.length; i++) {
@@ -147,9 +97,8 @@ export function calculateAllMetrics(
       : 0;
 
   // --- VI. THREAT & EXPLOITATION FEATURES ---
-  const LQ_ANALYSIS_RADIUS = 8;
+  const LQ_ANALYSIS_RADIUS = 20; // Match the radius in LsCalculator
 
-  // NEW: Defensive Control Metrics
   allMetrics.def_dist_closest_to_lq = findClosestPlayer(
     lq.center,
     defenders
@@ -171,7 +120,6 @@ export function calculateAllMetrics(
   }
   allMetrics.def_min_time_to_lq = minTimeToLq;
 
-  // NEW: Attacking Support Metrics
   allMetrics.num_attackers_near_lq = otherAttackers.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < LQ_ANALYSIS_RADIUS
   ).length;
@@ -182,7 +130,7 @@ export function calculateAllMetrics(
   allMetrics.att_v_def_lq_radius =
     allMetrics.num_attackers_near_lq - allMetrics.def_num_near_lq;
 
-  // --- VII. RAW PLAYER POSITIONS (Optional but good practice) ---
+  // --- VII. RAW PLAYER POSITIONS ---
   const allPlayers = Array.from(playerManager.playerMap.values());
   for (const player of allPlayers) {
     if (player.playerData.name === "Ball") continue;
