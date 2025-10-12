@@ -29,6 +29,7 @@ import {
   calculatePolygonArea,
   getPassingCone,
 } from "./utils.js";
+import { ControlLinesVisualizer } from "./ControlLinesVisualizer.js";
 
 const Y_OFFSET = 0.02;
 const INTERCEPTION_RADIUS = 1.5;
@@ -125,7 +126,8 @@ export class TelestratorManager {
     this.pitchWidth = 68;
     this.playbackClockRef = { value: 0 };
     this.captureRequest = null;
-    this.xTGridData = xTGridData; // Flag for requesting data capture
+    this.xTGridData = xTGridData;
+    this.controlLinesVisualizer = new ControlLinesVisualizer(scene); // Flag for requesting data capture
   }
 
   getXtValue(position) {
@@ -228,6 +230,7 @@ export class TelestratorManager {
     if (!enabled) {
       this.lsVisualizer.setVisible(false);
       this.pathVisualizer.setVisible(false);
+      this.controlLinesVisualizer.setVisible(false);
       this.previousPathInterceptors.forEach((p) =>
         p.hideInterceptorHighlight()
       );
@@ -826,6 +829,7 @@ export class TelestratorManager {
     if (!targetZone || !playerInPossession) {
       this.lsVisualizer.setVisible(false);
       this.pathVisualizer.setVisible(false);
+      this.controlLinesVisualizer.setVisible(false);
       this.previousPathInterceptors.forEach((p) =>
         p.hideInterceptorHighlight()
       );
@@ -889,6 +893,13 @@ export class TelestratorManager {
     };
 
     const scores = calculateLs(lq, carrier, defenders, otherAttackers, goal);
+    const ANALYSIS_RADIUS = 20;
+    const attackersNearLq = otherAttackers.filter(
+      (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
+    );
+    const defendersNearLq = defenders.filter(
+      (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
+    );
 
     const { points: conePoints, corners: coneCorners } = getPassingCone(
       carrierPosition,
@@ -900,6 +911,11 @@ export class TelestratorManager {
       carrierPosition,
       coneCorners,
       scores.feasibilityScore
+    );
+    this.controlLinesVisualizer.update(
+      lq.center,
+      attackersNearLq,
+      defendersNearLq
     );
 
     const currentPathInterceptors =

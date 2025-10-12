@@ -6,11 +6,17 @@ import {
 } from "./utils.js";
 
 /**
- * Calculates the definitive Leakage Score (LS v14.2 - Sigmoid Threat Tune).
- * This version replaces the hybrid "plateau" threat model with a smooth
- * inverse sigmoid curve for a more continuous threat decay.
+ * Calculates the definitive Leakage Score (LS v15 - Hybrid Philosophy Model).
+ * This version uses a sophisticated blend of multiplicative and additive models
+ * for the Situation Value, controlled by the alpha (α) parameter.
  */
 export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
+  // --- TOP-LEVEL TUNING PARAMETERS ---
+  const ALPHA = 0.2; // The "Philosophy Slider". 1.0 = pure product, 0.0 = pure average.
+  const BASE = 0.4; // The weight of latent potential in the final score.
+  const SCALE = 0.6; // The weight of realizable potential (feasibility) in the final score.
+  const K = 10.0; // The steepness of the final contrast curve.
+
   const threatPotentialScore = calculateThreatPotential(
     lq,
     goal,
@@ -24,10 +30,16 @@ export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
   );
   const feasibilityScore = calculateFeasibilityScore(lq, carrier, defenders);
 
-  const situationValue = threatPotentialScore * exploitationScore;
-  const raw_ls = situationValue * (0.6 + 0.4 * feasibilityScore);
-  const k = 5;
-  const final_ls = 1 / (1 + Math.exp(-k * (raw_ls - 0.5)));
+  // 1. Calculate Situation Value using the Hybrid Philosophy Model
+  const productValue = threatPotentialScore * exploitationScore;
+  const averageValue = (threatPotentialScore + exploitationScore) / 2;
+  const situationValue = ALPHA * productValue + (1 - ALPHA) * averageValue;
+
+  // 2. Calculate raw_ls using the Potential-Weighted feasibility model
+  const raw_ls = situationValue * (BASE + SCALE * feasibilityScore);
+
+  // 3. Apply the final contrast curve (Sigmoid)
+  const final_ls = 1 / (1 + Math.exp(-K * (raw_ls - 0.5)));
 
   return {
     final_ls: isFinite(final_ls) ? final_ls : 0,
@@ -39,22 +51,14 @@ export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
   };
 }
 
-// THIS FUNCTION IS THE ONLY ONE THAT HAS CHANGED
+// --- The component calculation functions below are UNCHANGED ---
+
 function calculateThreatPotential(lq, goal, defenders, otherAttackers) {
-  // --- START: INVERSE SIGMOID MODEL ---
-  // These are your new primary tuning knobs for threat potential.
-  const MIDPOINT_DISTANCE = 40; // The distance from goal where the threat score is exactly 0.5
-  const STEEPNESS = 0.25; // How sharply the threat drops off around the midpoint. Higher = steeper.
-
+  const MIDPOINT_DISTANCE = 30,
+    STEEPNESS = 0.6;
   const distanceToGoal = lq.center.distanceTo(goal.position);
-
-  // The inverse sigmoid function creates a smooth S-shaped decay curve.
   const proximityThreat =
     1 / (1 + Math.exp(STEEPNESS * (distanceToGoal - MIDPOINT_DISTANCE)));
-  // --- END: INVERSE SIGMOID MODEL ---
-
-  // The rest of the logic remains the same, combining this new proximity threat
-  // with the strategic bonus and other modifiers.
   const strategicThreat = calculateStrategicBonus(
     lq,
     goal,
@@ -62,23 +66,17 @@ function calculateThreatPotential(lq, goal, defenders, otherAttackers) {
     otherAttackers
   );
   const combinedProximityScore = Math.max(proximityThreat, strategicThreat);
-
-  const v_lq_p1 = new Vector3().subVectors(goal.post1, lq.center).normalize();
-  const v_lq_p2 = new Vector3().subVectors(goal.post2, lq.center).normalize();
-  const angle = v_lq_p1.angleTo(v_lq_p2);
-  const normalizedAngle = angle / (Math.PI / 2);
-  const goalAngleFactor = Math.pow(normalizedAngle, 0.75);
-
-  const baseAreaFactor = 1 / (1 + Math.exp(-0.04 * (lq.area - 75)));
-  const areaAmplifier = 1.0 + baseAreaFactor * 0.4;
-
-  let potential = combinedProximityScore * 0.7 + goalAngleFactor * 0.3;
+  const angle = new Vector3()
+    .subVectors(goal.post1, lq.center)
+    .angleTo(new Vector3().subVectors(goal.post2, lq.center));
+  const goalAngleFactor = Math.pow(angle / (Math.PI / 2), 0.75);
+  const areaAmplifier =
+    1.0 + (1 / (1 + Math.exp(-0.04 * (lq.area - 75)))) * 0.6;
+  let potential = combinedProximityScore * 0.5 + goalAngleFactor * 0.5;
   potential *= areaAmplifier;
-
   return Math.min(1.0, isFinite(potential) ? potential : 0);
 }
 
-// --- THE REST OF THE FILE IS UNCHANGED ---
 function calculateStrategicBonus(lq, goal, defenders, otherAttackers) {
   if (defenders.length === 0 || otherAttackers.length === 0) return 0.0;
   const defendingGoalLineX = -goal.position.x;
@@ -92,11 +90,11 @@ function calculateStrategicBonus(lq, goal, defenders, otherAttackers) {
     }
   }
   if (!lastDefender) return 0.0;
-  const lastDefenderX = lastDefender.mesh.position.x;
-  const isBehindLine =
-    Math.abs(lq.center.x - defendingGoalLineX) <
-    Math.abs(lastDefenderX - defendingGoalLineX);
-  if (!isBehindLine) return 0.0;
+  if (
+    Math.abs(lq.center.x - defendingGoalLineX) >=
+    Math.abs(lastDefender.mesh.position.x - defendingGoalLineX)
+  )
+    return 0.0;
   const { fastestTimeToArrival: attTimeToLq } = calculateTeamControlMetrics(
     lq.center,
     otherAttackers
@@ -107,8 +105,7 @@ function calculateStrategicBonus(lq, goal, defenders, otherAttackers) {
   );
   if (defTimeToLq <= attTimeToLq) return 0.0;
   const runway = lq.center.distanceTo(goal.position);
-  const MAX_BONUS = 0.85;
-  const bonus = MAX_BONUS * (1 / (1 + Math.exp(-0.15 * (runway - 35))));
+  const bonus = 0.85 * (1 / (1 + Math.exp(-0.6 * (runway - 35))));
   return isFinite(bonus) ? bonus : 0;
 }
 
@@ -122,8 +119,8 @@ function calculateExploitationScore(lq, defenders, otherAttackers) {
     defendersNearLq
   );
   const defRecoveryScore = Math.exp(-0.5 * defFastestTime);
-  const defSwarmScore = 1 / (1 + defendersNearLq.length * 0.5);
-  const defensiveControl = defRecoveryScore * 0.6 + defSwarmScore * 0.4;
+  const defSwarmScore = 1 / (1 + (defendersNearLq.length / 2) * 0.5);
+  const defensiveControl = defRecoveryScore * 0.8 + defSwarmScore * 0.2;
   const attackersNearLq = otherAttackers.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
