@@ -31,6 +31,7 @@ import {
 } from "./utils.js";
 import { ControlLinesVisualizer } from "./ControlLinesVisualizer.js";
 import { ControlRingVisualizer } from "./ControlRingVisualizer.js";
+import { updateDebugPanel, toggleDebugPanel } from "./DebugPanel.js";
 
 const Y_OFFSET = 0.02;
 const INTERCEPTION_RADIUS = 1.5;
@@ -238,6 +239,7 @@ export class TelestratorManager {
         p.hideInterceptorHighlight()
       );
       this.previousPathInterceptors.clear();
+      toggleDebugPanel(enabled);
     }
   }
 
@@ -907,6 +909,7 @@ export class TelestratorManager {
       goal,
       attackingDirection
     );
+    updateDebugPanel(scores);
 
     const { points: conePoints, corners: coneCorners } = getPassingCone(
       carrier.mesh.position,

@@ -9,7 +9,8 @@ export function createTelestratorUI({
   onTrackToggle,
   onClearTracks,
   onXgToggle,
-  onLsToggle, // <-- ADDED: Handler for the new LS checkbox
+  onLsToggle,
+  onDebugToggle, // <-- ADDED: Handler for the new LS checkbox
   homeTeamName,
   awayTeamName,
 }) {
@@ -211,7 +212,8 @@ export function createTelestratorUI({
   // --- Other Modes & Actions ---
   createCheckbox("Track", onTrackToggle);
   createCheckbox("View xG", onXgToggle);
-  createCheckbox("View LS", onLsToggle); // <-- MODIFIED: This is the new checkbox
+  createCheckbox("View LS", onLsToggle);
+  createCheckbox("Show Breakdown", onDebugToggle); // <-- MODIFIED: This is the new checkbox
   createSeparator();
 
   const undoBtn = createButton("undo", "Undo Last", false); // isTool is false

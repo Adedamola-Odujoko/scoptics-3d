@@ -27,6 +27,7 @@ import { TelestratorManager } from "./TelestratorManager.js";
 import { createStatsUI, updateStats } from "./StatsUI.js";
 import { HandController } from "./handController.js";
 import { createDataExporterUI } from "./DataExporterUI.js";
+import { initDebugPanel, toggleDebugPanel } from "./DebugPanel.js";
 
 // Global variable to hold the loaded Expected Threat data
 let xTGridData = null;
@@ -175,6 +176,7 @@ async function main() {
     loadingOverlay.style.display = "flex";
     loadingOverlay.style.opacity = 1;
   }
+  initDebugPanel();
 
   // --- ADDED: Load the Expected Threat (xT) data at startup ---
   try {
@@ -326,6 +328,7 @@ async function main() {
     onClearTracks: () => telestratorManager.clearAllTrackLines(),
     onXgToggle: (enabled) => telestratorManager.setXgMode(enabled),
     onLsToggle: (enabled) => telestratorManager.setLsMode(enabled),
+    onDebugToggle: (enabled) => toggleDebugPanel(enabled),
   });
 
   const buffer = new PlaybackBuffer();

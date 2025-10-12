@@ -5,6 +5,7 @@ import {
   getPassingCone,
 } from "./utils.js";
 
+// This is your tuned file, now modified to return detailed objects.
 export function calculateLs(
   lq,
   carrier,
@@ -13,35 +14,45 @@ export function calculateLs(
   goal,
   attackingDirection
 ) {
-  const threatPotentialScore = calculateThreatPotential(
+  const threatDetails = calculateThreatPotential(
     lq,
     goal,
     defenders,
     otherAttackers,
     attackingDirection
   );
-  const exploitationScore = calculateExploitationScore(
+  const exploitDetails = calculateExploitationScore(
     lq,
     defenders,
     otherAttackers
   );
-  const feasibilityScore = calculateFeasibilityScore(lq, carrier, defenders);
+  const feasyDetails = calculateFeasibilityScore(lq, carrier, defenders);
+
+  const threatPotentialScore = threatDetails.potential;
+  const exploitationScore = exploitDetails.finalScore;
+  const feasibilityScore = feasyDetails.finalScore;
+
   const ALPHA = 0.4,
     BASE = 0.5,
     SCALE = 0.5,
     K = 7.0;
-  const situationValue =
-    ALPHA * (threatPotentialScore * exploitationScore) +
-    (1 - ALPHA) * ((threatPotentialScore + exploitationScore) / 2);
+  const productValue = threatPotentialScore * exploitationScore;
+  const averageValue = (threatPotentialScore + exploitationScore) / 2;
+  const situationValue = ALPHA * productValue + (1 - ALPHA) * averageValue;
   const raw_ls = situationValue * (BASE + SCALE * feasibilityScore);
   const final_ls = 1 / (1 + Math.exp(-K * (raw_ls - 0.5)));
+
   return {
     final_ls: isFinite(final_ls) ? final_ls : 0,
-    threatPotentialScore: isFinite(threatPotentialScore)
-      ? threatPotentialScore
-      : 0,
-    exploitationScore: isFinite(exploitationScore) ? exploitationScore : 0,
-    feasibilityScore: isFinite(feasibilityScore) ? feasibilityScore : 0,
+    threatPotentialScore,
+    exploitationScore,
+    feasibilityScore,
+    details: {
+      threat: threatDetails,
+      exploit: exploitDetails,
+      feasy: feasyDetails,
+      final: { situationValue, raw_ls },
+    },
   };
 }
 
@@ -76,7 +87,15 @@ function calculateThreatPotential(
     1.0 + (1 / (1 + Math.exp(-0.04 * (lq.area - 75)))) * 0.4;
   let potential = combinedProximityScore * 0.6 + goalAngleFactor * 0.4;
   potential *= areaAmplifier;
-  return Math.min(1.0, isFinite(potential) ? potential : 0);
+
+  return {
+    potential: Math.min(1.0, isFinite(potential) ? potential : 0),
+    proximityThreat,
+    strategicThreat,
+    combinedProximityScore,
+    goalAngleFactor,
+    areaAmplifier,
+  };
 }
 
 function calculateStrategicBonus(
@@ -86,27 +105,11 @@ function calculateStrategicBonus(
   otherAttackers,
   attackingDirection
 ) {
-  console.log(
-    `--- STRATEGIC BONUS (v-FINAL) --- Received attacking direction: ${attackingDirection}`
-  );
-
-  if (
-    defenders.length === 0 ||
-    otherAttackers.length === 0 ||
-    !attackingDirection
-  ) {
-    console.log("Exit: Missing players or attacking direction.");
+  if (!defenders.length || !otherAttackers.length || !attackingDirection)
     return 0.0;
-  }
-
-  // --- THIS IS THE FINAL LOGIC FIX ---
-  // The "last defender" is the outfield player deepest in their own half (closest to their own goal).
   let lastDefender = null;
   let offsideLineX;
-
   if (attackingDirection < 0) {
-    // Attacking LEFT (-X). Defenders are defending the LEFT goal.
-    // We need the defender with the MINIMUM X-coordinate (closest to the -52.5 goal).
     offsideLineX = Infinity;
     for (const def of defenders) {
       if (def.playerData.role !== "GK" && def.mesh.position.x < offsideLineX) {
@@ -115,8 +118,6 @@ function calculateStrategicBonus(
       }
     }
   } else {
-    // Attacking RIGHT (+X). Defenders are defending the RIGHT goal.
-    // We need the defender with the MAXIMUM X-coordinate (closest to the +52.5 goal).
     offsideLineX = -Infinity;
     for (const def of defenders) {
       if (def.playerData.role !== "GK" && def.mesh.position.x > offsideLineX) {
@@ -125,66 +126,23 @@ function calculateStrategicBonus(
       }
     }
   }
-  // --- END OF FINAL LOGIC FIX ---
-
-  if (!lastDefender) {
-    console.log("Exit: Could not identify a last defender (outfield player).");
-    return 0.0;
-  }
-
-  console.log(
-    `Last Defender Found (Deepest Player): ${
-      lastDefender.playerData.name
-    } at x=${offsideLineX.toFixed(2)}`
-  );
-
-  // 3. Check if the LQ is behind the line
-  let isBehindLine;
-  if (attackingDirection < 0) {
-    // Attacking left
-    isBehindLine = lq.center.x < offsideLineX;
-  } else {
-    // Attacking right
-    isBehindLine = lq.center.x > offsideLineX;
-  }
-
-  if (!isBehindLine) {
-    console.log(
-      `Exit: LQ is NOT behind the line. LQ Center X: ${lq.center.x.toFixed(
-        2
-      )}, Last Defender X: ${offsideLineX.toFixed(2)}`
-    );
-    return 0.0;
-  }
-
-  console.log(`Condition MET: LQ is behind the defensive line.`);
-
-  // 4. Verify attacker advantage (unchanged)
-  const { fastestTimeToArrival: attTimeToLq } = calculateTeamControlMetrics(
+  if (!lastDefender) return 0.0;
+  let isBehindLine =
+    attackingDirection < 0
+      ? lq.center.x < offsideLineX
+      : lq.center.x > offsideLineX;
+  if (!isBehindLine) return 0.0;
+  const { fastestTimeToArrival: attTTA } = calculateTeamControlMetrics(
     lq.center,
     otherAttackers
   );
-  const { fastestTimeToArrival: defTimeToLq } = calculateTeamControlMetrics(
+  const { fastestTimeToArrival: defTTA } = calculateTeamControlMetrics(
     lq.center,
     defenders
   );
-
-  if (defTimeToLq <= attTimeToLq) {
-    console.log(
-      `Exit: Defender can recover faster. Def_TTA: ${defTimeToLq.toFixed(
-        1
-      )}s, Att_TTA: ${attTimeToLq.toFixed(1)}s`
-    );
-    return 0.0;
-  }
-
-  console.log(`Condition MET: Attacker has recovery advantage.`);
-
-  // 5. Calculate bonus (unchanged)
+  if (defTTA <= attTTA) return 0.0;
   const runway = lq.center.distanceTo(goal.position);
   const bonus = 0.95 * (1 / (1 + Math.exp(-0.25 * (runway - 20))));
-
-  console.log(`SUCCESS! Strategic Bonus calculated: ${bonus.toFixed(2)}`);
   return isFinite(bonus) ? bonus : 0;
 }
 
@@ -203,55 +161,81 @@ function calculateExploitationScore(lq, defenders, otherAttackers) {
   const attackersNearLq = otherAttackers.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
-  if (attackersNearLq.length === 0) return 0.1;
-  const { fastestTimeToArrival: attFastestTime } = calculateTeamControlMetrics(
-    lq.center,
-    attackersNearLq
-  );
-  const attSupportScore = Math.exp(-0.3 * attFastestTime);
-  const overloadFactor = Math.min(
-    1.0,
-    (attackersNearLq.length + 0.5) / (defendersNearLq.length + 1)
-  );
-  const attackingPotential = attSupportScore * 0.5 + overloadFactor * 0.5;
+  const attSupport =
+    attackersNearLq.length === 0
+      ? { potential: 0.1, tta: 99, score: 0, overload: 0 }
+      : (() => {
+          const { fastestTimeToArrival: tta } = calculateTeamControlMetrics(
+            lq.center,
+            attackersNearLq
+          );
+          const score = Math.exp(-0.3 * tta);
+          const overload = Math.min(
+            1.0,
+            (attackersNearLq.length + 0.5) / (defendersNearLq.length + 1)
+          );
+          const potential = score * 0.5 + overload * 0.5;
+          return { potential, tta, score, overload };
+        })();
   const exploitationScore =
-    attackingPotential * Math.pow(1 - defensiveControl, 0.5);
-  const arrivalTimeAdvantage = Math.max(0, defFastestTime - attFastestTime);
+    attSupport.potential * Math.pow(1 - defensiveControl, 0.5);
+  const arrivalTimeAdvantage = Math.max(0, defFastestTime - attSupport.tta);
   const speedBonus = 1 + Math.min(0.5, arrivalTimeAdvantage * 0.25);
   const finalScore = Math.min(1.0, exploitationScore * speedBonus);
-  return isFinite(finalScore) ? finalScore : 0;
+
+  return {
+    finalScore: isFinite(finalScore) ? finalScore : 0,
+    defFastestTime,
+    defRecoveryScore,
+    defSwarmScore,
+    defensiveControl,
+    attFastestTime: attSupport.tta,
+    attSupportScore: attSupport.score,
+    overloadFactor: attSupport.overload,
+    attackingPotential: attSupport.potential,
+    speedBonus,
+  };
 }
 
 function calculateFeasibilityScore(lq, carrier, defenders) {
-  const carrierPosition = carrier.mesh.position;
-  const { distance: pressureOnCarrierDist } = findClosestPlayer(
-    carrierPosition,
+  const { distance: pressureDist } = findClosestPlayer(
+    carrier.mesh.position,
     defenders
   );
   const pressureFactor =
-    1 / (1 + Math.exp(-1.5 * ((pressureOnCarrierDist || 99) - 4.0)));
-  const { points: conePoints } = getPassingCone(carrierPosition, lq.corners);
+    1 / (1 + Math.exp(-1.5 * ((pressureDist || 99) - 4.0)));
+  const { points: conePoints } = getPassingCone(
+    carrier.mesh.position,
+    lq.corners
+  );
   const numInterceptors = defenders.filter((def) =>
     isPointInTriangle(def.mesh.position, ...conePoints)
   ).length;
   const obstructionFactor = Math.exp(-0.7 * numInterceptors);
-  const distanceToLq = carrierPosition.distanceTo(lq.center);
-  const passDistFactor = Math.exp(-0.03 * distanceToLq);
+  const passDistFactor = Math.exp(
+    -0.03 * carrier.mesh.position.distanceTo(lq.center)
+  );
   const finalScore =
     obstructionFactor * 0.5 + pressureFactor * 0.35 + passDistFactor * 0.15;
-  return isFinite(finalScore) ? finalScore : 0;
+
+  return {
+    finalScore: isFinite(finalScore) ? finalScore : 0,
+    pressureDist: pressureDist || 99,
+    pressureFactor,
+    numInterceptors,
+    obstructionFactor,
+    passDistFactor,
+  };
 }
 
 function calculateTeamControlMetrics(target, players) {
   if (players.length === 0) return { fastestTimeToArrival: 99 };
   let fastestTimeToArrival = Infinity;
   players.forEach((p) => {
-    if (typeof p.currentSpeed !== "number" || isNaN(p.currentSpeed)) {
+    if (typeof p.currentSpeed !== "number" || isNaN(p.currentSpeed))
       p.currentSpeed = 0;
-    }
-    const dist = p.mesh.position.distanceTo(target);
-    const effectiveSpeed = Math.max(p.currentSpeed, 4.0);
-    const timeToArrival = dist / effectiveSpeed;
+    const timeToArrival =
+      p.mesh.position.distanceTo(target) / Math.max(p.currentSpeed, 4.0);
     if (timeToArrival < fastestTimeToArrival)
       fastestTimeToArrival = timeToArrival;
   });
