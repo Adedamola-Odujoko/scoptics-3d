@@ -30,6 +30,7 @@ import {
   getPassingCone,
 } from "./utils.js";
 import { ControlLinesVisualizer } from "./ControlLinesVisualizer.js";
+import { ControlRingVisualizer } from "./ControlRingVisualizer.js";
 
 const Y_OFFSET = 0.02;
 const INTERCEPTION_RADIUS = 1.5;
@@ -127,7 +128,8 @@ export class TelestratorManager {
     this.playbackClockRef = { value: 0 };
     this.captureRequest = null;
     this.xTGridData = xTGridData;
-    this.controlLinesVisualizer = new ControlLinesVisualizer(scene); // Flag for requesting data capture
+    this.controlLinesVisualizer = new ControlLinesVisualizer(scene);
+    this.controlRingVisualizer = new ControlRingVisualizer(scene); // Flag for requesting data capture
   }
 
   getXtValue(position) {
@@ -231,6 +233,7 @@ export class TelestratorManager {
       this.lsVisualizer.setVisible(false);
       this.pathVisualizer.setVisible(false);
       this.controlLinesVisualizer.setVisible(false);
+      this.controlRingVisualizer.setVisible(false);
       this.previousPathInterceptors.forEach((p) =>
         p.hideInterceptorHighlight()
       );
@@ -830,6 +833,7 @@ export class TelestratorManager {
       this.lsVisualizer.setVisible(false);
       this.pathVisualizer.setVisible(false);
       this.controlLinesVisualizer.setVisible(false);
+      this.controlRingVisualizer.setVisible(false);
       this.previousPathInterceptors.forEach((p) =>
         p.hideInterceptorHighlight()
       );
@@ -917,6 +921,7 @@ export class TelestratorManager {
       attackersNearLq,
       defendersNearLq
     );
+    this.controlRingVisualizer.update(targetZone, scores.exploitationScore);
 
     const currentPathInterceptors =
       conePoints.length > 2
@@ -963,5 +968,17 @@ export class TelestratorManager {
     this.updatePassingLanes();
     this.updateXgVisualizer();
     this.updateLsVisualizer();
+
+    if (this.isLsMode && this.controlRingVisualizer.group.visible) {
+      // We get the targetZone again to pass its properties to the update function
+      const zones = this.getZones();
+      const targetZone = zones.length > 0 ? zones[zones.length - 1] : null;
+      if (targetZone) {
+        // Find the last calculated score for exploitation to control the pulse
+        const lastExploitationScore =
+          parseFloat(this.lsVisualizer.exploitValueEl.textContent) || 0.5;
+        this.controlRingVisualizer.update(targetZone, lastExploitationScore);
+      }
+    }
   }
 }
