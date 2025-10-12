@@ -182,7 +182,7 @@ function calculateStrategicBonus(
 
   // 5. Calculate bonus (unchanged)
   const runway = lq.center.distanceTo(goal.position);
-  const bonus = 0.85 * (1 / (1 + Math.exp(-0.15 * (runway - 35))));
+  const bonus = 0.95 * (1 / (1 + Math.exp(-0.25 * (runway - 20))));
 
   console.log(`SUCCESS! Strategic Bonus calculated: ${bonus.toFixed(2)}`);
   return isFinite(bonus) ? bonus : 0;
