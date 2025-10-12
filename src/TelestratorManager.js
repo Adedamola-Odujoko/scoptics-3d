@@ -833,38 +833,41 @@ export class TelestratorManager {
       this.lsVisualizer.setVisible(false);
       this.pathVisualizer.setVisible(false);
       this.controlLinesVisualizer.setVisible(false);
-      this.controlRingVisualizer.setVisible(false);
-      this.previousPathInterceptors.forEach((p) =>
-        p.hideInterceptorHighlight()
-      );
-      this.previousPathInterceptors.clear();
+      //   this.swarmVisualizer.clear();
       return;
     }
 
     const carrier = playerInPossession;
-    const attackingTeamName = carrier.playerData.team;
     const homeTeamName = this.playerManager.metadata.home_team.name;
-    const defendingTeamName =
-      attackingTeamName === homeTeamName
-        ? this.playerManager.metadata.away_team.name
-        : homeTeamName;
-
+    const isCarrierHomeTeam = carrier.playerData.team === homeTeamName;
+    const defendingTeamName = isCarrierHomeTeam
+      ? this.playerManager.metadata.away_team.name
+      : homeTeamName;
     const otherAttackers = this.playerManager
-      .getAllTeamPlayers(attackingTeamName)
+      .getAllTeamPlayers(carrier.playerData.team)
       .filter((p) => p !== carrier && p && p.mesh);
     const defenders = this.playerManager
       .getAllTeamPlayers(defendingTeamName)
       .filter((p) => p && p.mesh);
 
-    const carrierPosition = carrier.mesh.position;
+    // --- FOOLPROOF ATTACKING DIRECTION LOGIC ---
+    const HALFTIME_MS = 2700000; // 45 minutes
+    const isSecondHalf = this.playbackClockRef.value > HALFTIME_MS;
+    // Assume home team attacks right (+X) in first half, away attacks left (-X)
+    let attackingDirection;
+    if (isCarrierHomeTeam) {
+      attackingDirection = isSecondHalf ? -1 : 1;
+    } else {
+      // Carrier is away team
+      attackingDirection = isSecondHalf ? 1 : -1;
+    }
+
     const PITCH_LENGTH = 105;
-    const GOAL_WIDTH = 7.32;
-    const isCarrierHomeTeam = carrier.playerData.team === homeTeamName;
-    const goalX = isCarrierHomeTeam ? -PITCH_LENGTH / 2 : PITCH_LENGTH / 2;
+    const goalX = (attackingDirection * PITCH_LENGTH) / 2;
     const goal = {
       position: new Vector3(goalX, 0, 0),
-      post1: new Vector3(goalX, 0, GOAL_WIDTH / 2),
-      post2: new Vector3(goalX, 0, -GOAL_WIDTH / 2),
+      post1: new Vector3(goalX, 0, 7.32 / 2),
+      post2: new Vector3(goalX, 0, -7.32 / 2),
     };
 
     const center = targetZone.position;
@@ -896,32 +899,38 @@ export class TelestratorManager {
       area: calculatePolygonArea(lqCorners),
     };
 
-    const scores = calculateLs(lq, carrier, defenders, otherAttackers, goal);
-    const ANALYSIS_RADIUS = 20;
-    const attackersNearLq = otherAttackers.filter(
-      (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
-    );
-    const defendersNearLq = defenders.filter(
-      (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
+    const scores = calculateLs(
+      lq,
+      carrier,
+      defenders,
+      otherAttackers,
+      goal,
+      attackingDirection
     );
 
     const { points: conePoints, corners: coneCorners } = getPassingCone(
-      carrierPosition,
+      carrier.mesh.position,
       lq.corners
+    );
+    const attackersNearLq = otherAttackers.filter(
+      (p) => p.mesh.position.distanceTo(lq.center) < 20
+    );
+    const defendersNearLq = defenders.filter(
+      (p) => p.mesh.position.distanceTo(lq.center) < 20
     );
 
     this.lsVisualizer.update(targetZone, scores);
     this.pathVisualizer.update(
-      carrierPosition,
+      carrier.mesh.position,
       coneCorners,
       scores.feasibilityScore
     );
+    // this.swarmVisualizer.update(attackersNearLq, defendersNearLq);
     this.controlLinesVisualizer.update(
       lq.center,
       attackersNearLq,
       defendersNearLq
     );
-    this.controlRingVisualizer.update(targetZone, scores.exploitationScore);
 
     const currentPathInterceptors =
       conePoints.length > 2
@@ -945,9 +954,7 @@ export class TelestratorManager {
         this.playbackClockRef.value,
         scores.final_ls
       );
-      if (metrics) {
-        stageEntry(metrics);
-      }
+      if (metrics) stageEntry(metrics);
       this.captureRequest = null;
     }
   }

@@ -88,9 +88,15 @@ export class MatchDataLoader {
             id: entityInfo.id,
             name: entityInfo.name,
             team: entityInfo.team,
-            role: entityInfo.role, // <-- Pass the role into frame data
-            x: -trackedObj.x * 100,
-            y: trackedObj.y * 100, // Corrected y-axis
+            role: entityInfo.role,
+
+            // --- THE DEFINITIVE FIX ---
+            // Load the X coordinate as-is. Do NOT flip it.
+            // The scene will now be a direct representation of the data.
+            x: trackedObj.x * 100,
+
+            // The Y-flip for the Z-axis is likely correct for visualization.
+            y: -trackedObj.y * 100,
           });
         }
       }

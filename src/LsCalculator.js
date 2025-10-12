@@ -5,23 +5,20 @@ import {
   getPassingCone,
 } from "./utils.js";
 
-/**
- * Calculates the definitive Leakage Score (LS v15 - Hybrid Philosophy Model).
- * This version uses a sophisticated blend of multiplicative and additive models
- * for the Situation Value, controlled by the alpha (α) parameter.
- */
-export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
-  // --- TOP-LEVEL TUNING PARAMETERS ---
-  const ALPHA = 0.2; // The "Philosophy Slider". 1.0 = pure product, 0.0 = pure average.
-  const BASE = 0.4; // The weight of latent potential in the final score.
-  const SCALE = 0.6; // The weight of realizable potential (feasibility) in the final score.
-  const K = 10.0; // The steepness of the final contrast curve.
-
+export function calculateLs(
+  lq,
+  carrier,
+  defenders,
+  otherAttackers,
+  goal,
+  attackingDirection
+) {
   const threatPotentialScore = calculateThreatPotential(
     lq,
     goal,
     defenders,
-    otherAttackers
+    otherAttackers,
+    attackingDirection
   );
   const exploitationScore = calculateExploitationScore(
     lq,
@@ -29,18 +26,15 @@ export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
     otherAttackers
   );
   const feasibilityScore = calculateFeasibilityScore(lq, carrier, defenders);
-
-  // 1. Calculate Situation Value using the Hybrid Philosophy Model
-  const productValue = threatPotentialScore * exploitationScore;
-  const averageValue = (threatPotentialScore + exploitationScore) / 2;
-  const situationValue = ALPHA * productValue + (1 - ALPHA) * averageValue;
-
-  // 2. Calculate raw_ls using the Potential-Weighted feasibility model
+  const ALPHA = 0.4,
+    BASE = 0.5,
+    SCALE = 0.5,
+    K = 7.0;
+  const situationValue =
+    ALPHA * (threatPotentialScore * exploitationScore) +
+    (1 - ALPHA) * ((threatPotentialScore + exploitationScore) / 2);
   const raw_ls = situationValue * (BASE + SCALE * feasibilityScore);
-
-  // 3. Apply the final contrast curve (Sigmoid)
   const final_ls = 1 / (1 + Math.exp(-K * (raw_ls - 0.5)));
-
   return {
     final_ls: isFinite(final_ls) ? final_ls : 0,
     threatPotentialScore: isFinite(threatPotentialScore)
@@ -51,19 +45,27 @@ export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
   };
 }
 
-// --- The component calculation functions below are UNCHANGED ---
-
-function calculateThreatPotential(lq, goal, defenders, otherAttackers) {
+function calculateThreatPotential(
+  lq,
+  goal,
+  defenders,
+  otherAttackers,
+  attackingDirection
+) {
   const MIDPOINT_DISTANCE = 30,
-    STEEPNESS = 0.6;
-  const distanceToGoal = lq.center.distanceTo(goal.position);
+    STEEPNESS = 0.25;
   const proximityThreat =
-    1 / (1 + Math.exp(STEEPNESS * (distanceToGoal - MIDPOINT_DISTANCE)));
+    1 /
+    (1 +
+      Math.exp(
+        STEEPNESS * (lq.center.distanceTo(goal.position) - MIDPOINT_DISTANCE)
+      ));
   const strategicThreat = calculateStrategicBonus(
     lq,
     goal,
     defenders,
-    otherAttackers
+    otherAttackers,
+    attackingDirection
   );
   const combinedProximityScore = Math.max(proximityThreat, strategicThreat);
   const angle = new Vector3()
@@ -71,30 +73,93 @@ function calculateThreatPotential(lq, goal, defenders, otherAttackers) {
     .angleTo(new Vector3().subVectors(goal.post2, lq.center));
   const goalAngleFactor = Math.pow(angle / (Math.PI / 2), 0.75);
   const areaAmplifier =
-    1.0 + (1 / (1 + Math.exp(-0.04 * (lq.area - 75)))) * 0.6;
-  let potential = combinedProximityScore * 0.5 + goalAngleFactor * 0.5;
+    1.0 + (1 / (1 + Math.exp(-0.04 * (lq.area - 75)))) * 0.4;
+  let potential = combinedProximityScore * 0.6 + goalAngleFactor * 0.4;
   potential *= areaAmplifier;
   return Math.min(1.0, isFinite(potential) ? potential : 0);
 }
 
-function calculateStrategicBonus(lq, goal, defenders, otherAttackers) {
-  if (defenders.length === 0 || otherAttackers.length === 0) return 0.0;
-  const defendingGoalLineX = -goal.position.x;
+function calculateStrategicBonus(
+  lq,
+  goal,
+  defenders,
+  otherAttackers,
+  attackingDirection
+) {
+  console.log(
+    `--- STRATEGIC BONUS (v-FINAL) --- Received attacking direction: ${attackingDirection}`
+  );
+
+  if (
+    defenders.length === 0 ||
+    otherAttackers.length === 0 ||
+    !attackingDirection
+  ) {
+    console.log("Exit: Missing players or attacking direction.");
+    return 0.0;
+  }
+
+  // --- THIS IS THE FINAL LOGIC FIX ---
+  // The "last defender" is the outfield player deepest in their own half (closest to their own goal).
   let lastDefender = null;
-  let minDistanceToOwnGoal = Infinity;
-  for (const def of defenders) {
-    const dist = Math.abs(def.mesh.position.x - defendingGoalLineX);
-    if (dist < minDistanceToOwnGoal) {
-      minDistanceToOwnGoal = dist;
-      lastDefender = def;
+  let offsideLineX;
+
+  if (attackingDirection < 0) {
+    // Attacking LEFT (-X). Defenders are defending the LEFT goal.
+    // We need the defender with the MINIMUM X-coordinate (closest to the -52.5 goal).
+    offsideLineX = Infinity;
+    for (const def of defenders) {
+      if (def.playerData.role !== "GK" && def.mesh.position.x < offsideLineX) {
+        offsideLineX = def.mesh.position.x;
+        lastDefender = def;
+      }
+    }
+  } else {
+    // Attacking RIGHT (+X). Defenders are defending the RIGHT goal.
+    // We need the defender with the MAXIMUM X-coordinate (closest to the +52.5 goal).
+    offsideLineX = -Infinity;
+    for (const def of defenders) {
+      if (def.playerData.role !== "GK" && def.mesh.position.x > offsideLineX) {
+        offsideLineX = def.mesh.position.x;
+        lastDefender = def;
+      }
     }
   }
-  if (!lastDefender) return 0.0;
-  if (
-    Math.abs(lq.center.x - defendingGoalLineX) >=
-    Math.abs(lastDefender.mesh.position.x - defendingGoalLineX)
-  )
+  // --- END OF FINAL LOGIC FIX ---
+
+  if (!lastDefender) {
+    console.log("Exit: Could not identify a last defender (outfield player).");
     return 0.0;
+  }
+
+  console.log(
+    `Last Defender Found (Deepest Player): ${
+      lastDefender.playerData.name
+    } at x=${offsideLineX.toFixed(2)}`
+  );
+
+  // 3. Check if the LQ is behind the line
+  let isBehindLine;
+  if (attackingDirection < 0) {
+    // Attacking left
+    isBehindLine = lq.center.x < offsideLineX;
+  } else {
+    // Attacking right
+    isBehindLine = lq.center.x > offsideLineX;
+  }
+
+  if (!isBehindLine) {
+    console.log(
+      `Exit: LQ is NOT behind the line. LQ Center X: ${lq.center.x.toFixed(
+        2
+      )}, Last Defender X: ${offsideLineX.toFixed(2)}`
+    );
+    return 0.0;
+  }
+
+  console.log(`Condition MET: LQ is behind the defensive line.`);
+
+  // 4. Verify attacker advantage (unchanged)
   const { fastestTimeToArrival: attTimeToLq } = calculateTeamControlMetrics(
     lq.center,
     otherAttackers
@@ -103,14 +168,28 @@ function calculateStrategicBonus(lq, goal, defenders, otherAttackers) {
     lq.center,
     defenders
   );
-  if (defTimeToLq <= attTimeToLq) return 0.0;
+
+  if (defTimeToLq <= attTimeToLq) {
+    console.log(
+      `Exit: Defender can recover faster. Def_TTA: ${defTimeToLq.toFixed(
+        1
+      )}s, Att_TTA: ${attTimeToLq.toFixed(1)}s`
+    );
+    return 0.0;
+  }
+
+  console.log(`Condition MET: Attacker has recovery advantage.`);
+
+  // 5. Calculate bonus (unchanged)
   const runway = lq.center.distanceTo(goal.position);
-  const bonus = 0.85 * (1 / (1 + Math.exp(-0.6 * (runway - 35))));
+  const bonus = 0.85 * (1 / (1 + Math.exp(-0.15 * (runway - 35))));
+
+  console.log(`SUCCESS! Strategic Bonus calculated: ${bonus.toFixed(2)}`);
   return isFinite(bonus) ? bonus : 0;
 }
 
 function calculateExploitationScore(lq, defenders, otherAttackers) {
-  const ANALYSIS_RADIUS = 20;
+  const ANALYSIS_RADIUS = 40;
   const defendersNearLq = defenders.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
@@ -118,9 +197,9 @@ function calculateExploitationScore(lq, defenders, otherAttackers) {
     lq.center,
     defendersNearLq
   );
-  const defRecoveryScore = Math.exp(-0.5 * defFastestTime);
-  const defSwarmScore = 1 / (1 + (defendersNearLq.length / 2) * 0.5);
-  const defensiveControl = defRecoveryScore * 0.8 + defSwarmScore * 0.2;
+  const defRecoveryScore = Math.exp(-0.7 * defFastestTime);
+  const defSwarmScore = 1 / (1 + defendersNearLq.length * 0.5);
+  const defensiveControl = defRecoveryScore * 0.6 + defSwarmScore * 0.4;
   const attackersNearLq = otherAttackers.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
