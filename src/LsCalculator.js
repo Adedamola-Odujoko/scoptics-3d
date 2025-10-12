@@ -147,7 +147,7 @@ function calculateStrategicBonus(
 }
 
 function calculateExploitationScore(lq, defenders, otherAttackers) {
-  const ANALYSIS_RADIUS = 40;
+  const ANALYSIS_RADIUS = 20;
   const defendersNearLq = defenders.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
@@ -155,24 +155,24 @@ function calculateExploitationScore(lq, defenders, otherAttackers) {
     lq.center,
     defendersNearLq
   );
-  const defRecoveryScore = Math.exp(-0.7 * defFastestTime);
+  const defRecoveryScore = Math.exp(-0.2 * defFastestTime);
   const defSwarmScore = 1 / (1 + defendersNearLq.length * 0.5);
-  const defensiveControl = defRecoveryScore * 0.6 + defSwarmScore * 0.4;
+  const defensiveControl = defRecoveryScore * 0.7 + defSwarmScore * 0.3;
   const attackersNearLq = otherAttackers.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
   const attSupport =
     attackersNearLq.length === 0
-      ? { potential: 0.1, tta: 99, score: 0, overload: 0 }
+      ? { potential: 0.1, tta: 5, score: 0, overload: 0 }
       : (() => {
           const { fastestTimeToArrival: tta } = calculateTeamControlMetrics(
             lq.center,
             attackersNearLq
           );
-          const score = Math.exp(-0.3 * tta);
+          const score = Math.exp(-0.5 * tta);
           const overload = Math.min(
             1.0,
-            (attackersNearLq.length + 0.5) / (defendersNearLq.length + 1)
+            (attackersNearLq.length + 0.5) / (defendersNearLq.length + 1.5)
           );
           const potential = score * 0.5 + overload * 0.5;
           return { potential, tta, score, overload };
