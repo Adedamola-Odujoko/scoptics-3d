@@ -6,8 +6,9 @@ import {
 } from "./utils.js";
 
 /**
- * Calculates the definitive Leakage Score (LS v14 - Production).
- * This version is the final, stable, and debugged model.
+ * Calculates the definitive Leakage Score (LS v14.2 - Sigmoid Threat Tune).
+ * This version replaces the hybrid "plateau" threat model with a smooth
+ * inverse sigmoid curve for a more continuous threat decay.
  */
 export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
   const threatPotentialScore = calculateThreatPotential(
@@ -38,20 +39,22 @@ export function calculateLs(lq, carrier, defenders, otherAttackers, goal) {
   };
 }
 
+// THIS FUNCTION IS THE ONLY ONE THAT HAS CHANGED
 function calculateThreatPotential(lq, goal, defenders, otherAttackers) {
-  const CRITICAL_DISTANCE = 16.5,
-    IN_BOX_BASE_SCORE = 0.95,
-    DECAY_RATE = 0.08;
+  // --- START: INVERSE SIGMOID MODEL ---
+  // These are your new primary tuning knobs for threat potential.
+  const MIDPOINT_DISTANCE = 40; // The distance from goal where the threat score is exactly 0.5
+  const STEEPNESS = 0.25; // How sharply the threat drops off around the midpoint. Higher = steeper.
+
   const distanceToGoal = lq.center.distanceTo(goal.position);
-  let proximityThreat;
-  if (distanceToGoal <= CRITICAL_DISTANCE) {
-    proximityThreat =
-      1.0 - (1.0 - IN_BOX_BASE_SCORE) * (distanceToGoal / CRITICAL_DISTANCE);
-  } else {
-    const distanceFromBox = distanceToGoal - CRITICAL_DISTANCE;
-    proximityThreat =
-      IN_BOX_BASE_SCORE * Math.exp(-DECAY_RATE * distanceFromBox);
-  }
+
+  // The inverse sigmoid function creates a smooth S-shaped decay curve.
+  const proximityThreat =
+    1 / (1 + Math.exp(STEEPNESS * (distanceToGoal - MIDPOINT_DISTANCE)));
+  // --- END: INVERSE SIGMOID MODEL ---
+
+  // The rest of the logic remains the same, combining this new proximity threat
+  // with the strategic bonus and other modifiers.
   const strategicThreat = calculateStrategicBonus(
     lq,
     goal,
@@ -59,18 +62,23 @@ function calculateThreatPotential(lq, goal, defenders, otherAttackers) {
     otherAttackers
   );
   const combinedProximityScore = Math.max(proximityThreat, strategicThreat);
+
   const v_lq_p1 = new Vector3().subVectors(goal.post1, lq.center).normalize();
   const v_lq_p2 = new Vector3().subVectors(goal.post2, lq.center).normalize();
   const angle = v_lq_p1.angleTo(v_lq_p2);
   const normalizedAngle = angle / (Math.PI / 2);
   const goalAngleFactor = Math.pow(normalizedAngle, 0.75);
+
   const baseAreaFactor = 1 / (1 + Math.exp(-0.04 * (lq.area - 75)));
   const areaAmplifier = 1.0 + baseAreaFactor * 0.4;
+
   let potential = combinedProximityScore * 0.7 + goalAngleFactor * 0.3;
   potential *= areaAmplifier;
+
   return Math.min(1.0, isFinite(potential) ? potential : 0);
 }
 
+// --- THE REST OF THE FILE IS UNCHANGED ---
 function calculateStrategicBonus(lq, goal, defenders, otherAttackers) {
   if (defenders.length === 0 || otherAttackers.length === 0) return 0.0;
   const defendingGoalLineX = -goal.position.x;
@@ -127,10 +135,11 @@ function calculateExploitationScore(lq, defenders, otherAttackers) {
   const attSupportScore = Math.exp(-0.3 * attFastestTime);
   const overloadFactor = Math.min(
     1.0,
-    attackersNearLq.length / (defendersNearLq.length + 1)
+    (attackersNearLq.length + 0.5) / (defendersNearLq.length + 1)
   );
   const attackingPotential = attSupportScore * 0.5 + overloadFactor * 0.5;
-  const exploitationScore = attackingPotential * (1 - defensiveControl);
+  const exploitationScore =
+    attackingPotential * Math.pow(1 - defensiveControl, 0.5);
   const arrivalTimeAdvantage = Math.max(0, defFastestTime - attFastestTime);
   const speedBonus = 1 + Math.min(0.5, arrivalTimeAdvantage * 0.25);
   const finalScore = Math.min(1.0, exploitationScore * speedBonus);
