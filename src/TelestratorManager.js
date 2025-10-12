@@ -24,45 +24,11 @@ import { calculateLs } from "./LsCalculator.js";
 import { PathVisualizer } from "./PathVisualizer.js";
 import { calculateAllMetrics } from "./MetricCalculator.js";
 import { stageEntry } from "./DataExporterUI.js";
-
-// --- HELPER FUNCTIONS ---
-function findClosestPlayer(targetPosition, players) {
-  let closestPlayer = null;
-  let minDistance = Infinity;
-  for (const player of players) {
-    if (!player || !player.mesh) continue;
-    const distance = player.mesh.position.distanceTo(targetPosition);
-    if (distance < minDistance) {
-      minDistance = distance;
-      closestPlayer = player;
-    }
-  }
-  return { player: closestPlayer, distance: minDistance };
-}
-
-function isPointInTriangle(p, p0, p1, p2) {
-  const p_2d = new Vector2(p.x, p.z);
-  const p0_2d = new Vector2(p0.x, p0.z);
-  const p1_2d = new Vector2(p1.x, p1.z);
-  const p2_2d = new Vector2(p2.x, p2.z);
-  const s =
-    p0_2d.y * p2_2d.x -
-    p0_2d.x * p2_2d.y +
-    (p2_2d.y - p0_2d.y) * p_2d.x +
-    (p0_2d.x - p2_2d.x) * p_2d.y;
-  const t =
-    p0_2d.x * p1_2d.y -
-    p0_2d.y * p1_2d.x +
-    (p0_2d.y - p1_2d.y) * p_2d.x +
-    (p1_2d.x - p0_2d.x) * p_2d.y;
-  if (s < 0 != t < 0 && s != 0 && t != 0) return false;
-  const A =
-    -p1_2d.y * p2_2d.x +
-    p0_2d.y * (p2_2d.x - p1_2d.x) +
-    p0_2d.x * (p1_2d.y - p2_2d.y) +
-    p1_2d.x * p2_2d.y;
-  return A < 0 ? s <= 0 && s + t >= A : s >= 0 && s + t <= A;
-}
+import {
+  isPointInTriangle,
+  calculatePolygonArea,
+  getPassingCone,
+} from "./utils.js";
 
 const Y_OFFSET = 0.02;
 const INTERCEPTION_RADIUS = 1.5;
@@ -109,17 +75,6 @@ function distanceToLineSegment(p, v, w) {
     v.z + t * (w.z - v.z)
   );
   return p.distanceTo(projection);
-}
-
-function calculatePolygonArea(points) {
-  let area = 0;
-  const n = points.length;
-  for (let i = 0; i < n; i++) {
-    const p1 = points[i];
-    const p2 = points[(i + 1) % n];
-    area += p1.x * p2.z - p2.x * p1.z;
-  }
-  return Math.abs(area / 2.0);
 }
 
 export class TelestratorManager {
@@ -862,14 +817,12 @@ export class TelestratorManager {
     this.xgVisualizer.update(shooterPos_scene, goalPosts_scene, xgValue);
   }
   // FILE: src/TelestratorManager.js (REPLACE THE 'updateLsVisualizer' FUNCTION)
-
   updateLsVisualizer() {
     if (!this.isLsMode) return;
     const zones = this.getZones();
     const targetZone = zones.length > 0 ? zones[zones.length - 1] : null;
     const playerInPossession = this.playerManager.playerInPossession;
 
-    // If we don't have a zone drawn or a player in possession, hide visuals and exit.
     if (!targetZone || !playerInPossession) {
       this.lsVisualizer.setVisible(false);
       this.pathVisualizer.setVisible(false);
@@ -880,9 +833,7 @@ export class TelestratorManager {
       return;
     }
 
-    // --- 1. GATHER CORE ENTITIES & CONTEXT ---
     const carrier = playerInPossession;
-    const carrierPosition = carrier.mesh.position;
     const attackingTeamName = carrier.playerData.team;
     const homeTeamName = this.playerManager.metadata.home_team.name;
     const defendingTeamName =
@@ -892,77 +843,65 @@ export class TelestratorManager {
 
     const otherAttackers = this.playerManager
       .getAllTeamPlayers(attackingTeamName)
-      .filter((p) => p !== carrier);
-    const defenders = this.playerManager.getAllTeamPlayers(defendingTeamName);
+      .filter((p) => p !== carrier && p && p.mesh);
+    const defenders = this.playerManager
+      .getAllTeamPlayers(defendingTeamName)
+      .filter((p) => p && p.mesh);
 
-    // --- 2. DEFINE PITCH GEOMETRY & GOAL ---
+    const carrierPosition = carrier.mesh.position;
     const PITCH_LENGTH = 105;
     const GOAL_WIDTH = 7.32;
-
     const isCarrierHomeTeam = carrier.playerData.team === homeTeamName;
     const goalX = isCarrierHomeTeam ? -PITCH_LENGTH / 2 : PITCH_LENGTH / 2;
-
     const goal = {
       position: new Vector3(goalX, 0, 0),
       post1: new Vector3(goalX, 0, GOAL_WIDTH / 2),
       post2: new Vector3(goalX, 0, -GOAL_WIDTH / 2),
     };
 
-    // --- 3. DEFINE THE LEAKAGE QUADRANT (LQ) ---
     const center = targetZone.position;
-    const halfWidth = targetZone.scale.x / 2;
-    const halfDepth = targetZone.scale.y / 2;
     const lqCorners = [
-      new Vector3(center.x - halfWidth, Y_OFFSET, center.z - halfDepth),
-      new Vector3(center.x + halfWidth, Y_OFFSET, center.z - halfDepth),
-      new Vector3(center.x + halfWidth, Y_OFFSET, center.z + halfDepth),
-      new Vector3(center.x - halfWidth, Y_OFFSET, center.z + halfDepth),
+      new Vector3(
+        center.x - targetZone.scale.x / 2,
+        Y_OFFSET,
+        center.z - targetZone.scale.y / 2
+      ),
+      new Vector3(
+        center.x + targetZone.scale.x / 2,
+        Y_OFFSET,
+        center.z - targetZone.scale.y / 2
+      ),
+      new Vector3(
+        center.x + targetZone.scale.x / 2,
+        Y_OFFSET,
+        center.z + targetZone.scale.y / 2
+      ),
+      new Vector3(
+        center.x - targetZone.scale.x / 2,
+        Y_OFFSET,
+        center.z + targetZone.scale.y / 2
+      ),
     ];
     const lq = {
       center: center.clone(),
       corners: lqCorners,
-      area: calculatePolygonArea(lqCorners), // Pre-calculate area for the calculator
+      area: calculatePolygonArea(lqCorners),
     };
 
-    // --- 4. CALCULATE THE LEAKAGE SCORE (NEW HIERARCHICAL MODEL) ---
-    // This single function call replaces all the previous manual context building.
-    const { final_ls, feasibilityScore } = calculateLs(
-      lq,
-      carrier,
-      defenders,
-      otherAttackers,
-      goal
+    const scores = calculateLs(lq, carrier, defenders, otherAttackers, goal);
+
+    const { points: conePoints, corners: coneCorners } = getPassingCone(
+      carrierPosition,
+      lq.corners
     );
 
-    // --- 5. CALCULATE GEOMETRIES REQUIRED FOR VISUALIZERS ---
-    // This is needed for the path cone and interceptor highlighting.
-    let maxAngle = -1,
-      coneCorners = [];
-    for (let i = 0; i < 4; i++) {
-      for (let j = i + 1; j < 4; j++) {
-        const v1 = new Vector3().subVectors(lq.corners[i], carrierPosition);
-        const v2 = new Vector3().subVectors(lq.corners[j], carrierPosition);
-        const angle = v1.angleTo(v2);
-        if (angle > maxAngle) {
-          maxAngle = angle;
-          coneCorners = [lq.corners[i], lq.corners[j]];
-        }
-      }
-    }
-    const sortedConeCorners =
-      coneCorners.length > 1 ? coneCorners.sort((a, b) => a.z - b.z) : [];
-    const conePoints = [carrierPosition, ...sortedConeCorners];
-
-    // --- 6. UPDATE VISUALIZERS ---
-    this.lsVisualizer.update(targetZone, final_ls);
-    // Use the feasibility score returned directly from the new calculator for the path color.
+    this.lsVisualizer.update(targetZone, scores);
     this.pathVisualizer.update(
       carrierPosition,
-      sortedConeCorners,
-      feasibilityScore
+      coneCorners,
+      scores.feasibilityScore
     );
 
-    // Update interceptor highlights based on the passing cone.
     const currentPathInterceptors =
       conePoints.length > 2
         ? defenders.filter((def) =>
@@ -978,20 +917,20 @@ export class TelestratorManager {
     });
     this.previousPathInterceptors = interceptorSet;
 
-    // --- 7. STAGE DATA FOR EXPORT (IF REQUESTED) ---
     if (this.captureRequest && targetZone === this.captureRequest) {
       const metrics = calculateAllMetrics(
         lq,
         this.playerManager,
         this.playbackClockRef.value,
-        final_ls // Use the final LS from the new calculator as the ground truth
+        scores.final_ls
       );
       if (metrics) {
         stageEntry(metrics);
       }
-      this.captureRequest = null; // Reset the request flag
+      this.captureRequest = null;
     }
   }
+
   update() {
     for (const [playerId, highlightMesh] of this.highlights.entries()) {
       const player = this.playerManager.playerMap.get(playerId);
