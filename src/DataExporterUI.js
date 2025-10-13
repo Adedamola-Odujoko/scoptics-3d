@@ -172,9 +172,7 @@ function processStagedPacket(packet) {
     goal,
   } = packet;
 
-  // --- THIS IS THE FIX ---
-  // Construct the 'lq_object' that the calculator expects from the raw lq_zone (the Mesh).
-  const Y_OFFSET = 0.02; // Make sure this matches your Telestrator
+  const Y_OFFSET = 0.02;
   const center = lq_zone.position;
   const lqCorners = [
     new Vector3(
@@ -203,9 +201,7 @@ function processStagedPacket(packet) {
     corners: lqCorners,
     area: calculatePolygonArea(lqCorners),
   };
-  // --- END OF FIX ---
 
-  // 1. Calculate final ground truth scores and all intermediate details
   const defenders = playerManager.getAllTeamPlayers(
     attackingTeamName === playerManager.metadata.home_team.name
       ? playerManager.metadata.away_team.name
@@ -214,6 +210,8 @@ function processStagedPacket(packet) {
   const otherAttackers = playerManager
     .getAllTeamPlayers(attackingTeamName)
     .filter((p) => p !== playerManager.playerInPossession);
+
+  // This now returns the final scores AND the detailed breakdown
   const scores = calculateLs(
     lq_object,
     playerManager.playerInPossession,
@@ -223,14 +221,12 @@ function processStagedPacket(packet) {
     attackingDirection
   );
 
-  // 2. Calculate global team-level features
   const globalFeatures = calculateGlobalFeatures(
     playerManager,
     attackingTeamName,
     attackingDirection
   );
 
-  // 3. Assemble the complete, final data object
   const finalDataObject = {
     metadata: {
       timestamp_ms: timestamp,
@@ -257,16 +253,20 @@ function processStagedPacket(packet) {
       })),
       global_feature_vector: globalFeatures,
       lq_specific_feature_vector: {
-        lq_dist_to_goal: lq_object.center.distanceTo(goal.position),
-        lq_goal_angle: new Vector3()
-          .subVectors(goal.post1, lq_object.center)
-          .angleTo(new Vector3().subVectors(goal.post2, lq_object.center)),
-        lq_area: lq_object.area,
+        // --- THIS IS THE NEW, FINALIZED LIST ---
+        // Final Component Scores
+        final_threat_score: scores.threatPotentialScore,
+        final_exploitation_score: scores.exploitationScore,
+        final_feasibility_score: scores.feasibilityScore,
+
+        // Threat Details
         threat_proximity: scores.details.threat.proximityThreat,
         threat_strategic: scores.details.threat.strategicThreat,
         threat_combined: scores.details.threat.combinedProximityScore,
         threat_angle_factor: scores.details.threat.goalAngleFactor,
         threat_area_amplifier: scores.details.threat.areaAmplifier,
+
+        // Exploitation Details
         exploit_def_fastest_tta: scores.details.exploit.defFastestTime,
         exploit_def_recovery_score: scores.details.exploit.defRecoveryScore,
         exploit_def_swarm_score: scores.details.exploit.defSwarmScore,
@@ -276,6 +276,8 @@ function processStagedPacket(packet) {
         exploit_overload_factor: scores.details.exploit.overloadFactor,
         exploit_attacking_potential: scores.details.exploit.attackingPotential,
         exploit_speed_bonus: scores.details.exploit.speedBonus,
+
+        // Feasibility Details
         feasy_pressure_on_carrier_dist: scores.details.feasy.pressureDist,
         feasy_pressure_factor: scores.details.feasy.pressureFactor,
         feasy_pass_dist_to_lq:

@@ -155,7 +155,7 @@ function calculateExploitationScore(lq, defenders, otherAttackers) {
     lq.center,
     defendersNearLq
   );
-  const defRecoveryScore = Math.exp(-0.2 * defFastestTime);
+  const defRecoveryScore = Math.exp(-0.5 * defFastestTime);
   const defSwarmScore = 1 / (1 + defendersNearLq.length * 0.5);
   const defensiveControl = defRecoveryScore * 0.7 + defSwarmScore * 0.3;
   const attackersNearLq = otherAttackers.filter(
@@ -203,7 +203,7 @@ function calculateFeasibilityScore(lq, carrier, defenders) {
     defenders
   );
   const pressureFactor =
-    1 / (1 + Math.exp(-1.5 * ((pressureDist || 99) - 4.0)));
+    1 / (1 + Math.exp(-1.5 * ((pressureDist || 99) - 2.0)));
   const { points: conePoints } = getPassingCone(
     carrier.mesh.position,
     lq.corners
@@ -211,7 +211,7 @@ function calculateFeasibilityScore(lq, carrier, defenders) {
   const numInterceptors = defenders.filter((def) =>
     isPointInTriangle(def.mesh.position, ...conePoints)
   ).length;
-  const obstructionFactor = Math.exp(-0.7 * numInterceptors);
+  const obstructionFactor = Math.exp(-0.3 * numInterceptors);
   const passDistFactor = Math.exp(
     -0.03 * carrier.mesh.position.distanceTo(lq.center)
   );
@@ -235,7 +235,7 @@ function calculateTeamControlMetrics(target, players) {
     if (typeof p.currentSpeed !== "number" || isNaN(p.currentSpeed))
       p.currentSpeed = 0;
     const timeToArrival =
-      p.mesh.position.distanceTo(target) / Math.max(p.currentSpeed, 4.0);
+      p.mesh.position.distanceTo(target) / Math.max(p.currentSpeed, 8.0);
     if (timeToArrival < fastestTimeToArrival)
       fastestTimeToArrival = timeToArrival;
   });
