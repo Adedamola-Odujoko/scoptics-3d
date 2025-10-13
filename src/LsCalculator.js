@@ -79,13 +79,14 @@ function calculateThreatPotential(
     attackingDirection
   );
   const combinedProximityScore = Math.max(proximityThreat, strategicThreat);
-  const angle = new Vector3()
-    .subVectors(goal.post1, lq.center)
-    .angleTo(new Vector3().subVectors(goal.post2, lq.center));
-  const goalAngleFactor = Math.pow(angle / (Math.PI / 2), 0.75);
+  const ANGLE_DECAY_RATE = 1.2; // TUNABLE: Higher value = more punishing for wide angles.
+  const vectorToGoalCenter = new Vector3().subVectors(goal.position, lq.center);
+  const forwardVector = new Vector3(attackingDirection, 0, 0);
+  const offCenterAngleRad = vectorToGoalCenter.angleTo(forwardVector);
+  const goalAngleFactor = Math.exp(-ANGLE_DECAY_RATE * offCenterAngleRad);
   const areaAmplifier =
     1.0 + (1 / (1 + Math.exp(-0.04 * (lq.area - 75)))) * 0.4;
-  let potential = combinedProximityScore * 0.6 + goalAngleFactor * 0.4;
+  let potential = combinedProximityScore * 0.7 + goalAngleFactor * 0.3;
   potential *= areaAmplifier;
 
   return {
