@@ -32,6 +32,7 @@ import {
 import { ControlLinesVisualizer } from "./ControlLinesVisualizer.js";
 import { ControlRingVisualizer } from "./ControlRingVisualizer.js";
 import { updateDebugPanel, toggleDebugPanel } from "./DebugPanel.js";
+import { calculateGlobalFeatures } from "./FeatureCalculator.js";
 
 const Y_OFFSET = 0.02;
 const INTERCEPTION_RADIUS = 1.5;
@@ -169,14 +170,45 @@ export class TelestratorManager {
   }
 
   handleMouseUp() {
-    // The ONLY job of handleMouseUp now is to set a flag.
-    // It NO LONGER performs any calculations.
     if (this.isDrawing && this.currentTool.startsWith("zone")) {
-      this.captureRequest = this.currentDrawing; // Flag this zone for capture
-    }
+      const capturedLQZone =
+        this.annotations.children[this.annotations.children.length - 1];
 
+      const carrier = this.playerManager.playerInPossession;
+      if (carrier) {
+        // --- We need to recalculate the goal and direction here to pass it ---
+        const PITCH_LENGTH = 105;
+        const HALFTIME_MS = 2700000;
+        const homeTeamName = this.playerManager.metadata.home_team.name;
+        const isCarrierHomeTeam = carrier.playerData.team === homeTeamName;
+        const isSecondHalf = this.playbackClockRef.value > HALFTIME_MS;
+        let attackingDirection;
+        if (isCarrierHomeTeam) {
+          attackingDirection = isSecondHalf ? -1 : 1;
+        } else {
+          attackingDirection = isSecondHalf ? 1 : -1;
+        }
+        const goalX = (attackingDirection * PITCH_LENGTH) / 2;
+        const goal = {
+          position: new Vector3(goalX, 0, 0),
+          post1: new Vector3(goalX, 0, 7.32 / 2),
+          post2: new Vector3(goalX, 0, -7.32 / 2),
+        };
+        // --- End recalculation ---
+
+        const fullDataPacket = {
+          timestamp: this.playbackClockRef.value,
+          lq_zone: capturedLQZone, // This is the Mesh
+          playerManager: this.playerManager,
+          attackingTeamName: carrier.playerData.team,
+          attackingDirection: attackingDirection,
+          goal: goal, // Pass the goal object
+        };
+
+        stageEntry(fullDataPacket);
+      }
+    }
     this.isDrawing = false;
-    this.currentDrawing = null;
   }
 
   setTool(tool) {

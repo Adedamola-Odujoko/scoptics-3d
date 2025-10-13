@@ -1,7 +1,10 @@
-// FILE: src/DataExporterUI.js
+import { Vector3 } from "three";
+import { calculateLs } from "./LsCalculator.js";
+import { calculateGlobalFeatures } from "./FeatureCalculator.js";
+import { calculatePolygonArea } from "./utils.js";
 
 let collectedEntries = [];
-let stagedEntry = null;
+let stagedPacket = null; // This will hold the live data packet temporarily
 
 /**
  * Creates the main container, table, and export button on the screen.
@@ -9,13 +12,11 @@ let stagedEntry = null;
 export function createDataExporterUI() {
   const container = document.createElement("div");
   container.id = "data-exporter-container";
-  // --- START: EXPAND THE UI TO BE WIDER ---
   container.style.position = "absolute";
   container.style.bottom = "80px";
   container.style.left = "14px";
-  container.style.width = "550px"; // <-- Increased width
+  container.style.width = "550px";
   container.style.maxHeight = "40vh";
-  // ... (rest of container styling is the same)
   container.style.background = "rgba(0,0,0,0.6)";
   container.style.borderRadius = "8px";
   container.style.zIndex = "998";
@@ -24,7 +25,6 @@ export function createDataExporterUI() {
   container.style.fontSize = "11px";
   container.style.display = "flex";
   container.style.flexDirection = "column";
-  // --- END EXPAND ---
 
   const header = document.createElement("div");
   header.style.padding = "8px 12px";
@@ -36,11 +36,11 @@ export function createDataExporterUI() {
   header.style.alignItems = "center";
 
   const title = document.createElement("h4");
-  title.innerText = "Collected Leakage Data (Summary)"; // <-- Updated title
+  title.innerText = "Collected Leakage Data (Summary)";
   title.style.margin = "0";
 
   const exportButton = document.createElement("button");
-  exportButton.innerText = "Export Full CSV"; // <-- Updated button text
+  exportButton.innerText = "Export Full JSONL"; // Changed button text
   exportButton.style.padding = "4px 8px";
   exportButton.style.border = "1px solid #555";
   exportButton.style.background = "#2a2a2a";
@@ -52,7 +52,7 @@ export function createDataExporterUI() {
   header.appendChild(exportButton);
 
   const tableContainer = document.createElement("div");
-  tableContainer.style.overflow = "auto"; // Allow horizontal scroll if needed
+  tableContainer.style.overflow = "auto";
   tableContainer.style.padding = "0 12px 12px 12px";
 
   const table = document.createElement("table");
@@ -63,19 +63,15 @@ export function createDataExporterUI() {
   const thead = document.createElement("thead");
   const headerRow = document.createElement("tr");
 
-  // --- START: EXPANDED HEADERS ---
   const headers = [
     "Time",
     "LS",
-    "LQ Area",
-    "Int.",
-    "Pressure",
-    "Def. W",
+    "Threat",
+    "Exploit",
+    "Feasy",
     "LQ Ctr X",
     "LQ Ctr Z",
   ];
-  // --- END EXPANDED HEADERS ---
-
   headers.forEach((text) => {
     const th = document.createElement("th");
     th.innerText = text;
@@ -97,12 +93,12 @@ export function createDataExporterUI() {
   stagingRow.style.background = "rgba(80, 80, 0, 0.3)";
 
   const stagingDataCell = document.createElement("td");
-  stagingDataCell.colSpan = "5"; // Adjusted colspan
-  stagingDataCell.id = "staging-data";
+  stagingDataCell.colSpan = "5";
   stagingDataCell.style.padding = "4px";
+  stagingDataCell.innerText = "Staged event. Click Accept to process and save.";
 
   const stagingActionsCell = document.createElement("td");
-  stagingActionsCell.colSpan = "3"; // Adjusted colspan
+  stagingActionsCell.colSpan = "2";
   stagingActionsCell.style.textAlign = "right";
 
   const acceptBtn = document.createElement("button");
@@ -133,46 +129,170 @@ export function createDataExporterUI() {
   table.appendChild(thead);
   table.appendChild(tbody);
   table.appendChild(tfoot);
-
   tableContainer.appendChild(table);
   container.appendChild(header);
   container.appendChild(tableContainer);
-
   document.body.appendChild(container);
 
-  exportButton.onclick = exportToCsv;
+  exportButton.onclick = exportToJsonl;
+
   acceptBtn.onclick = () => {
-    if (stagedEntry) {
-      addEntryToTable(stagedEntry);
+    if (stagedPacket) {
+      const finalDataObject = processStagedPacket(stagedPacket);
+      if (finalDataObject) {
+        addEntryToTable(finalDataObject);
+      }
       clearStagingArea();
     }
   };
-  rejectBtn.onclick = () => {
-    clearStagingArea();
-  };
+
+  rejectBtn.onclick = clearStagingArea;
 }
 
-export function stageEntry(entry) {
-  if (stagedEntry) {
-    clearStagingArea();
-  }
-  stagedEntry = entry;
+export function stageEntry(fullDataPacket) {
+  if (stagedPacket) clearStagingArea();
+  stagedPacket = fullDataPacket;
   const stagingRow = document.getElementById("staging-row");
-  const stagingDataCell = document.getElementById("staging-data");
-  if (!stagingRow || !stagingDataCell) return;
-  const timestamp = (entry.timestamp / 1000).toFixed(1) + "s";
-  const ls = entry.ls_heuristic.toFixed(2);
-  const interceptors = entry.path_num_interceptors;
-  stagingDataCell.innerText = `Staged: ${timestamp} | LS: ${ls} | Int: ${interceptors}`;
-  stagingRow.style.display = "table-row";
+  if (stagingRow) stagingRow.style.display = "table-row";
 }
 
 function clearStagingArea() {
-  stagedEntry = null;
+  stagedPacket = null;
   const stagingRow = document.getElementById("staging-row");
-  if (stagingRow) {
-    stagingRow.style.display = "none";
-  }
+  if (stagingRow) stagingRow.style.display = "none";
+}
+
+function processStagedPacket(packet) {
+  const {
+    timestamp,
+    lq_zone,
+    playerManager,
+    attackingTeamName,
+    attackingDirection,
+    goal,
+  } = packet;
+
+  // --- THIS IS THE FIX ---
+  // Construct the 'lq_object' that the calculator expects from the raw lq_zone (the Mesh).
+  const Y_OFFSET = 0.02; // Make sure this matches your Telestrator
+  const center = lq_zone.position;
+  const lqCorners = [
+    new Vector3(
+      center.x - lq_zone.scale.x / 2,
+      Y_OFFSET,
+      center.z - lq_zone.scale.y / 2
+    ),
+    new Vector3(
+      center.x + lq_zone.scale.x / 2,
+      Y_OFFSET,
+      center.z - lq_zone.scale.y / 2
+    ),
+    new Vector3(
+      center.x + lq_zone.scale.x / 2,
+      Y_OFFSET,
+      center.z + lq_zone.scale.y / 2
+    ),
+    new Vector3(
+      center.x - lq_zone.scale.x / 2,
+      Y_OFFSET,
+      center.z + lq_zone.scale.y / 2
+    ),
+  ];
+  const lq_object = {
+    center: center.clone(),
+    corners: lqCorners,
+    area: calculatePolygonArea(lqCorners),
+  };
+  // --- END OF FIX ---
+
+  // 1. Calculate final ground truth scores and all intermediate details
+  const defenders = playerManager.getAllTeamPlayers(
+    attackingTeamName === playerManager.metadata.home_team.name
+      ? playerManager.metadata.away_team.name
+      : playerManager.metadata.home_team.name
+  );
+  const otherAttackers = playerManager
+    .getAllTeamPlayers(attackingTeamName)
+    .filter((p) => p !== playerManager.playerInPossession);
+  const scores = calculateLs(
+    lq_object,
+    playerManager.playerInPossession,
+    defenders,
+    otherAttackers,
+    goal,
+    attackingDirection
+  );
+
+  // 2. Calculate global team-level features
+  const globalFeatures = calculateGlobalFeatures(
+    playerManager,
+    attackingTeamName,
+    attackingDirection
+  );
+
+  // 3. Assemble the complete, final data object
+  const finalDataObject = {
+    metadata: {
+      timestamp_ms: timestamp,
+      attacking_team_name: attackingTeamName,
+    },
+    ground_truth_labels: {
+      target_lq_box: {
+        center_x: lq_object.center.x,
+        center_z: lq_object.center.z,
+        width: lq_zone.scale.x,
+        height: lq_zone.scale.y,
+      },
+      target_ls_score: scores.final_ls,
+    },
+    input_features: {
+      player_data: Array.from(playerManager.playerMap.values()).map((p) => ({
+        id: p.playerData.id,
+        team: p.playerData.team,
+        role: p.playerData.role,
+        x: p.mesh.position.x,
+        z: p.mesh.position.z,
+        vx: p.velocity.x,
+        vz: p.velocity.z,
+      })),
+      global_feature_vector: globalFeatures,
+      lq_specific_feature_vector: {
+        lq_dist_to_goal: lq_object.center.distanceTo(goal.position),
+        lq_goal_angle: new Vector3()
+          .subVectors(goal.post1, lq_object.center)
+          .angleTo(new Vector3().subVectors(goal.post2, lq_object.center)),
+        lq_area: lq_object.area,
+        threat_proximity: scores.details.threat.proximityThreat,
+        threat_strategic: scores.details.threat.strategicThreat,
+        threat_combined: scores.details.threat.combinedProximityScore,
+        threat_angle_factor: scores.details.threat.goalAngleFactor,
+        threat_area_amplifier: scores.details.threat.areaAmplifier,
+        exploit_def_fastest_tta: scores.details.exploit.defFastestTime,
+        exploit_def_recovery_score: scores.details.exploit.defRecoveryScore,
+        exploit_def_swarm_score: scores.details.exploit.defSwarmScore,
+        exploit_def_control_score: scores.details.exploit.defensiveControl,
+        exploit_att_fastest_tta: scores.details.exploit.attFastestTime,
+        exploit_att_support_score: scores.details.exploit.attSupportScore,
+        exploit_overload_factor: scores.details.exploit.overloadFactor,
+        exploit_attacking_potential: scores.details.exploit.attackingPotential,
+        exploit_speed_bonus: scores.details.exploit.speedBonus,
+        feasy_pressure_on_carrier_dist: scores.details.feasy.pressureDist,
+        feasy_pressure_factor: scores.details.feasy.pressureFactor,
+        feasy_pass_dist_to_lq:
+          playerManager.playerInPossession.mesh.position.distanceTo(
+            lq_object.center
+          ),
+        feasy_pass_dist_factor: scores.details.feasy.passDistFactor,
+        feasy_num_interceptors: scores.details.feasy.numInterceptors,
+        feasy_obstruction_factor: scores.details.feasy.obstructionFactor,
+      },
+      raster_input_channels: {
+        player_position_map_path: `data/positions/frame_${timestamp}.npy`,
+        voronoi_freespace_map_path: `data/voronoi/frame_${timestamp}.npy`,
+      },
+    },
+  };
+  return finalDataObject;
 }
 
 function addEntryToTable(entry) {
@@ -181,27 +301,25 @@ function addEntryToTable(entry) {
   if (!tbody) return;
 
   const row = document.createElement("tr");
-
-  // --- START: EXPANDED DATA FOR DISPLAY ---
-  const timestamp = (entry.timestamp / 1000).toFixed(1) + "s";
-  const ls = entry.ls_heuristic.toFixed(2);
-  const lqArea = entry.lq_area.toFixed(1);
-  const interceptors = entry.path_num_interceptors;
-  const pressure = entry.pressure_on_carrier_dist.toFixed(1);
-  const defWidth = (entry.def_line_width || 0).toFixed(1);
-  const lqCenterX = entry.lq_center_x.toFixed(1);
-  const lqCenterZ = entry.lq_center_z.toFixed(1);
-
-  [
-    timestamp,
-    ls,
-    lqArea,
-    interceptors,
-    pressure,
-    defWidth,
-    lqCenterX,
-    lqCenterZ,
-  ].forEach((text) => {
+  const dataForTable = {
+    time: (entry.metadata.timestamp_ms / 1000).toFixed(1) + "s",
+    ls: entry.ground_truth_labels.target_ls_score.toFixed(2),
+    threat:
+      entry.input_features.lq_specific_feature_vector.threat_combined.toFixed(
+        2
+      ),
+    exploit:
+      entry.input_features.lq_specific_feature_vector.exploit_attacking_potential.toFixed(
+        2
+      ),
+    feasy:
+      entry.input_features.lq_specific_feature_vector.feasy_obstruction_factor.toFixed(
+        2
+      ),
+    lq_x: entry.ground_truth_labels.target_lq_box.center_x.toFixed(1),
+    lq_z: entry.ground_truth_labels.target_lq_box.center_z.toFixed(1),
+  };
+  Object.values(dataForTable).forEach((text) => {
     const td = document.createElement("td");
     td.innerText = text;
     td.style.padding = "4px";
@@ -209,42 +327,24 @@ function addEntryToTable(entry) {
     td.style.whiteSpace = "nowrap";
     row.appendChild(td);
   });
-  // --- END EXPANDED DATA ---
-
   tbody.appendChild(row);
-  tbody.parentElement.parentElement.scrollTop =
-    tbody.parentElement.parentElement.scrollHeight;
 }
 
-function exportToCsv() {
+function exportToJsonl() {
   if (collectedEntries.length === 0) {
     alert("No data collected yet!");
     return;
   }
-
-  // This is the key part: It gets ALL keys from the full data object.
-  const headers = Object.keys(collectedEntries[0]);
-  const csvRows = [headers.join(",")];
-
-  for (const entry of collectedEntries) {
-    // It then maps over ALL headers to get every single value.
-    const values = headers.map((header) => {
-      const value = entry[header];
-      if (typeof value === "string" && value.includes(",")) {
-        return `"${value}"`;
-      }
-      return value === null ? "" : value; // Handle null values
-    });
-    csvRows.push(values.join(","));
-  }
-
-  const csvString = csvRows.join("\n");
-  const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
-
+  const jsonlString = collectedEntries
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  const blob = new Blob([jsonlString], {
+    type: "application/jsonl+json;charset=utf-8;",
+  });
   const link = document.createElement("a");
   const url = URL.createObjectURL(blob);
   link.setAttribute("href", url);
-  link.setAttribute("download", `leakage_data_${new Date().toISOString()}.csv`);
+  link.setAttribute("download", `mlds_data_${new Date().toISOString()}.jsonl`);
   link.style.visibility = "hidden";
   document.body.appendChild(link);
   link.click();
