@@ -163,7 +163,7 @@ function calculateExploitationScore(lq, defenders, attackers, carrier) {
     defAggProb = defProbs.reduce((s, v) => s + v, 0);
   }
 
-  const defRecoveryScore = Math.exp(-0.3 * defFastestTime);
+  const defRecoveryScore = Math.exp(-0.1 * defFastestTime);
 
   // FIX #1: Make swarm score much more sensitive
   const SWARM_SENSITIVITY = 5; // Was 0.4. Now much more punishing.
@@ -202,7 +202,7 @@ function calculateExploitationScore(lq, defenders, attackers, carrier) {
   const arrivalTimeAdvantage = Math.max(0, defFastestTime - attFastestTime);
   const speedBonus = 1 + Math.tanh(arrivalTimeAdvantage * 0.2) * 0.45;
   const baseAttackingPotential = attSupportScore * 0.6 + overloadScore * 0.4;
-  const DEFENSIVE_PENALTY_EXPONENT = 0.7;
+  const DEFENSIVE_PENALTY_EXPONENT = 1;
   const exploitationScore =
     baseAttackingPotential *
     Math.pow(1 - defensiveControl, DEFENSIVE_PENALTY_EXPONENT);
@@ -279,7 +279,7 @@ function calculateTeamControlMetrics(target, players, carrierPosition = null) {
   if (players.length === 0) return { fastestTimeToArrival: 99, ttas: [] };
 
   const AVERAGE_PASS_SPEED = 15.0; // m/s. TUNABLE. Higher for driven passes, lower for lofted.
-  const MIN_EFFECTIVE_SPEED = 2.0;
+  const MIN_EFFECTIVE_SPEED = 3.0;
 
   const timeForBallToTravel =
     carrierPosition.distanceTo(target) / AVERAGE_PASS_SPEED;

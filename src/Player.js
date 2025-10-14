@@ -32,6 +32,7 @@ export class Player {
     this.isInterceptor = false;
     this.isInferred = false;
     this.velocity = new Vector3();
+    this.previousVelocity = new Vector3();
 
     const playerMaterial = new MeshStandardMaterial({
       color: initialColor,
@@ -143,6 +144,7 @@ export class Player {
   }
 
   smooth(alpha, dt) {
+    this.previousVelocity.copy(this.velocity);
     const prevPos = this.mesh.position.clone();
 
     this.velocity
