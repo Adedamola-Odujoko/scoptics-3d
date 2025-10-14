@@ -31,7 +31,7 @@ export function calculateLs(
   const ALPHA = 0.4,
     BASE = 0.5,
     SCALE = 0.5,
-    K = 7.0;
+    K = 10.0;
   const productValue = threatPotentialScore * exploitationScore;
   const averageValue = (threatPotentialScore + exploitationScore) / 2;
   const situationValue = ALPHA * productValue + (1 - ALPHA) * averageValue;
@@ -146,7 +146,7 @@ function calculateExploitationScore(lq, defenders, attackers, carrier) {
   const ANALYSIS_RADIUS = 20;
 
   // --- Defensive Side ---
-  const DEF_LAMBDA = 0.5; // Slightly more aggressive decay
+  const DEF_LAMBDA = 0.4; // Slightly more aggressive decay
   const defendersNearLq = defenders.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
@@ -190,7 +190,7 @@ function calculateExploitationScore(lq, defenders, attackers, carrier) {
 
     attFastestTime = fastestTimeToArrival;
     aggAttSupport = ttas
-      .map((t) => Math.exp(-0.2 * t))
+      .map((t) => Math.exp(-0.15 * t))
       .reduce((s, v) => s + v, 0);
     attSupportScore = Math.tanh(aggAttSupport * 2.0);
   }
@@ -279,7 +279,7 @@ function calculateTeamControlMetrics(target, players, carrierPosition = null) {
   if (players.length === 0) return { fastestTimeToArrival: 99, ttas: [] };
 
   const AVERAGE_PASS_SPEED = 15.0; // m/s. TUNABLE. Higher for driven passes, lower for lofted.
-  const MIN_EFFECTIVE_SPEED = 3.0;
+  const MIN_EFFECTIVE_SPEED = 4.0;
 
   const timeForBallToTravel =
     carrierPosition.distanceTo(target) / AVERAGE_PASS_SPEED;

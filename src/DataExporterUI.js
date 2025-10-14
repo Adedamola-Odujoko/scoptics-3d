@@ -4,11 +4,8 @@ import { calculateGlobalFeatures } from "./FeatureCalculator.js";
 import { calculatePolygonArea } from "./utils.js";
 
 let collectedEntries = [];
-let stagedPacket = null; // This will hold the live data packet temporarily
+let stagedPacket = null;
 
-/**
- * Creates the main container, table, and export button on the screen.
- */
 export function createDataExporterUI() {
   const container = document.createElement("div");
   container.id = "data-exporter-container";
@@ -29,40 +26,31 @@ export function createDataExporterUI() {
   const header = document.createElement("div");
   header.style.padding = "8px 12px";
   header.style.background = "rgba(0,0,0,0.5)";
-  header.style.borderTopLeftRadius = "8px";
-  header.style.borderTopRightRadius = "8px";
   header.style.display = "flex";
   header.style.justifyContent = "space-between";
   header.style.alignItems = "center";
-
   const title = document.createElement("h4");
   title.innerText = "Collected Leakage Data (Summary)";
   title.style.margin = "0";
-
   const exportButton = document.createElement("button");
-  exportButton.innerText = "Export Full JSONL"; // Changed button text
+  exportButton.innerText = "Export Full JSONL";
   exportButton.style.padding = "4px 8px";
   exportButton.style.border = "1px solid #555";
   exportButton.style.background = "#2a2a2a";
   exportButton.style.color = "#ddd";
   exportButton.style.borderRadius = "4px";
   exportButton.style.cursor = "pointer";
-
   header.appendChild(title);
   header.appendChild(exportButton);
 
   const tableContainer = document.createElement("div");
   tableContainer.style.overflow = "auto";
   tableContainer.style.padding = "0 12px 12px 12px";
-
   const table = document.createElement("table");
-  table.id = "data-table";
   table.style.width = "100%";
   table.style.borderCollapse = "collapse";
-
   const thead = document.createElement("thead");
   const headerRow = document.createElement("tr");
-
   const headers = [
     "Time",
     "LS",
@@ -78,29 +66,24 @@ export function createDataExporterUI() {
     th.style.textAlign = "left";
     th.style.padding = "4px";
     th.style.borderBottom = "1px solid #555";
-    th.style.whiteSpace = "nowrap";
     headerRow.appendChild(th);
   });
   thead.appendChild(headerRow);
 
   const tbody = document.createElement("tbody");
   tbody.id = "data-table-body";
-
   const tfoot = document.createElement("tfoot");
   const stagingRow = document.createElement("tr");
   stagingRow.id = "staging-row";
   stagingRow.style.display = "none";
   stagingRow.style.background = "rgba(80, 80, 0, 0.3)";
-
   const stagingDataCell = document.createElement("td");
   stagingDataCell.colSpan = "5";
   stagingDataCell.style.padding = "4px";
   stagingDataCell.innerText = "Staged event. Click Accept to process and save.";
-
   const stagingActionsCell = document.createElement("td");
   stagingActionsCell.colSpan = "2";
   stagingActionsCell.style.textAlign = "right";
-
   const acceptBtn = document.createElement("button");
   acceptBtn.innerText = "✔ Accept";
   acceptBtn.style.background = "#004d00";
@@ -110,7 +93,6 @@ export function createDataExporterUI() {
   acceptBtn.style.marginRight = "4px";
   acceptBtn.style.borderRadius = "4px";
   acceptBtn.style.cursor = "pointer";
-
   const rejectBtn = document.createElement("button");
   rejectBtn.innerText = "✖ Reject";
   rejectBtn.style.background = "#660000";
@@ -119,7 +101,6 @@ export function createDataExporterUI() {
   rejectBtn.style.padding = "4px 8px";
   rejectBtn.style.borderRadius = "4px";
   rejectBtn.style.cursor = "pointer";
-
   stagingActionsCell.appendChild(acceptBtn);
   stagingActionsCell.appendChild(rejectBtn);
   stagingRow.appendChild(stagingDataCell);
@@ -135,17 +116,13 @@ export function createDataExporterUI() {
   document.body.appendChild(container);
 
   exportButton.onclick = exportToJsonl;
-
   acceptBtn.onclick = () => {
     if (stagedPacket) {
       const finalDataObject = processStagedPacket(stagedPacket);
-      if (finalDataObject) {
-        addEntryToTable(finalDataObject);
-      }
+      if (finalDataObject) addEntryToTable(finalDataObject);
       clearStagingArea();
     }
   };
-
   rejectBtn.onclick = clearStagingArea;
 }
 
@@ -202,25 +179,22 @@ function processStagedPacket(packet) {
     area: calculatePolygonArea(lqCorners),
   };
 
+  const carrier = playerManager.playerInPossession;
   const defenders = playerManager.getAllTeamPlayers(
     attackingTeamName === playerManager.metadata.home_team.name
       ? playerManager.metadata.away_team.name
       : playerManager.metadata.home_team.name
   );
-  const otherAttackers = playerManager
-    .getAllTeamPlayers(attackingTeamName)
-    .filter((p) => p !== playerManager.playerInPossession);
+  const attackers = playerManager.getAllTeamPlayers(attackingTeamName);
 
-  // This now returns the final scores AND the detailed breakdown
   const scores = calculateLs(
     lq_object,
-    playerManager.playerInPossession,
+    carrier,
     defenders,
-    otherAttackers,
+    attackers,
     goal,
     attackingDirection
   );
-
   const globalFeatures = calculateGlobalFeatures(
     playerManager,
     attackingTeamName,
@@ -253,37 +227,33 @@ function processStagedPacket(packet) {
       })),
       global_feature_vector: globalFeatures,
       lq_specific_feature_vector: {
-        // --- THIS IS THE NEW, FINALIZED LIST ---
-        // Final Component Scores
         final_threat_score: scores.threatPotentialScore,
         final_exploitation_score: scores.exploitationScore,
         final_feasibility_score: scores.feasibilityScore,
 
-        // Threat Details
         threat_proximity: scores.details.threat.proximityThreat,
         threat_strategic: scores.details.threat.strategicThreat,
         threat_combined: scores.details.threat.combinedProximityScore,
         threat_angle_factor: scores.details.threat.goalAngleFactor,
         threat_area_amplifier: scores.details.threat.areaAmplifier,
 
-        // Exploitation Details
+        exploit_def_agg_prob: scores.details.exploit.defAggProb,
         exploit_def_fastest_tta: scores.details.exploit.defFastestTime,
         exploit_def_recovery_score: scores.details.exploit.defRecoveryScore,
         exploit_def_swarm_score: scores.details.exploit.defSwarmScore,
         exploit_def_control_score: scores.details.exploit.defensiveControl,
+        exploit_att_agg_support: scores.details.exploit.aggAttSupport,
         exploit_att_fastest_tta: scores.details.exploit.attFastestTime,
         exploit_att_support_score: scores.details.exploit.attSupportScore,
         exploit_overload_factor: scores.details.exploit.overloadFactor,
         exploit_attacking_potential: scores.details.exploit.attackingPotential,
         exploit_speed_bonus: scores.details.exploit.speedBonus,
 
-        // Feasibility Details
         feasy_pressure_on_carrier_dist: scores.details.feasy.pressureDist,
         feasy_pressure_factor: scores.details.feasy.pressureFactor,
-        feasy_pass_dist_to_lq:
-          playerManager.playerInPossession.mesh.position.distanceTo(
-            lq_object.center
-          ),
+        feasy_pass_dist_to_lq: carrier.mesh.position.distanceTo(
+          lq_object.center
+        ),
         feasy_pass_dist_factor: scores.details.feasy.passDistFactor,
         feasy_num_interceptors: scores.details.feasy.numInterceptors,
         feasy_obstruction_factor: scores.details.feasy.obstructionFactor,
@@ -301,21 +271,20 @@ function addEntryToTable(entry) {
   collectedEntries.push(entry);
   const tbody = document.getElementById("data-table-body");
   if (!tbody) return;
-
   const row = document.createElement("tr");
   const dataForTable = {
     time: (entry.metadata.timestamp_ms / 1000).toFixed(1) + "s",
     ls: entry.ground_truth_labels.target_ls_score.toFixed(2),
     threat:
-      entry.input_features.lq_specific_feature_vector.threat_combined.toFixed(
+      entry.input_features.lq_specific_feature_vector.final_threat_score.toFixed(
         2
       ),
     exploit:
-      entry.input_features.lq_specific_feature_vector.exploit_attacking_potential.toFixed(
+      entry.input_features.lq_specific_feature_vector.final_exploitation_score.toFixed(
         2
       ),
     feasy:
-      entry.input_features.lq_specific_feature_vector.feasy_obstruction_factor.toFixed(
+      entry.input_features.lq_specific_feature_vector.final_feasibility_score.toFixed(
         2
       ),
     lq_x: entry.ground_truth_labels.target_lq_box.center_x.toFixed(1),
@@ -326,17 +295,13 @@ function addEntryToTable(entry) {
     td.innerText = text;
     td.style.padding = "4px";
     td.style.borderBottom = "1px solid #333";
-    td.style.whiteSpace = "nowrap";
     row.appendChild(td);
   });
   tbody.appendChild(row);
 }
 
 function exportToJsonl() {
-  if (collectedEntries.length === 0) {
-    alert("No data collected yet!");
-    return;
-  }
+  if (collectedEntries.length === 0) return;
   const jsonlString = collectedEntries
     .map((entry) => JSON.stringify(entry))
     .join("\n");
