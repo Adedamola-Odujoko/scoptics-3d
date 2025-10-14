@@ -30,7 +30,7 @@ export function createDataExporterUI() {
   header.style.justifyContent = "space-between";
   header.style.alignItems = "center";
   const title = document.createElement("h4");
-  title.innerText = "Collected Leakage Data (Summary)";
+  title.innerText = "Collected Leakage Data";
   title.style.margin = "0";
   const exportButton = document.createElement("button");
   exportButton.innerText = "Export Full JSONL";
@@ -51,15 +51,7 @@ export function createDataExporterUI() {
   table.style.borderCollapse = "collapse";
   const thead = document.createElement("thead");
   const headerRow = document.createElement("tr");
-  const headers = [
-    "Time",
-    "LS",
-    "Threat",
-    "Exploit",
-    "Feasy",
-    "LQ Ctr X",
-    "LQ Ctr Z",
-  ];
+  const headers = ["Time", "LS", "Type", "LQ Ctr X", "LQ Ctr Z"];
   headers.forEach((text) => {
     const th = document.createElement("th");
     th.innerText = text;
@@ -78,14 +70,17 @@ export function createDataExporterUI() {
   stagingRow.style.display = "none";
   stagingRow.style.background = "rgba(80, 80, 0, 0.3)";
   const stagingDataCell = document.createElement("td");
-  stagingDataCell.colSpan = "5";
+  stagingDataCell.colSpan = "3";
   stagingDataCell.style.padding = "4px";
-  stagingDataCell.innerText = "Staged event. Click Accept to process and save.";
+  stagingDataCell.innerText =
+    "Staged event. Accept LQ, Mark as Negative, or Cancel.";
   const stagingActionsCell = document.createElement("td");
   stagingActionsCell.colSpan = "2";
   stagingActionsCell.style.textAlign = "right";
+
   const acceptBtn = document.createElement("button");
-  acceptBtn.innerText = "✔ Accept";
+  acceptBtn.innerText = "✔ Accept LQ";
+  acceptBtn.title = "Accept the drawn Leakage Quadrant";
   acceptBtn.style.background = "#004d00";
   acceptBtn.style.color = "white";
   acceptBtn.style.border = "none";
@@ -93,15 +88,30 @@ export function createDataExporterUI() {
   acceptBtn.style.marginRight = "4px";
   acceptBtn.style.borderRadius = "4px";
   acceptBtn.style.cursor = "pointer";
+
+  const negativeBtn = document.createElement("button");
+  negativeBtn.innerText = "Ø Mark Negative";
+  negativeBtn.title = "Save this frame as a negative sample (no leakage)";
+  negativeBtn.style.background = "#003366";
+  negativeBtn.style.color = "white";
+  negativeBtn.style.border = "none";
+  negativeBtn.style.padding = "4px 8px";
+  negativeBtn.style.marginRight = "4px";
+  negativeBtn.style.borderRadius = "4px";
+  negativeBtn.style.cursor = "pointer";
+
   const rejectBtn = document.createElement("button");
-  rejectBtn.innerText = "✖ Reject";
+  rejectBtn.innerText = "✖ Cancel";
+  rejectBtn.title = "Cancel and clear the staging area";
   rejectBtn.style.background = "#660000";
   rejectBtn.style.color = "white";
   rejectBtn.style.border = "none";
   rejectBtn.style.padding = "4px 8px";
   rejectBtn.style.borderRadius = "4px";
   rejectBtn.style.cursor = "pointer";
+
   stagingActionsCell.appendChild(acceptBtn);
+  stagingActionsCell.appendChild(negativeBtn);
   stagingActionsCell.appendChild(rejectBtn);
   stagingRow.appendChild(stagingDataCell);
   stagingRow.appendChild(stagingActionsCell);
@@ -116,13 +126,23 @@ export function createDataExporterUI() {
   document.body.appendChild(container);
 
   exportButton.onclick = exportToJsonl;
+
   acceptBtn.onclick = () => {
     if (stagedPacket) {
-      const finalDataObject = processStagedPacket(stagedPacket);
+      const finalDataObject = processStagedPacket(stagedPacket, false); // isNegative = false
       if (finalDataObject) addEntryToTable(finalDataObject);
       clearStagingArea();
     }
   };
+
+  negativeBtn.onclick = () => {
+    if (stagedPacket) {
+      const finalDataObject = processStagedPacket(stagedPacket, true); // isNegative = true
+      if (finalDataObject) addEntryToTable(finalDataObject);
+      clearStagingArea();
+    }
+  };
+
   rejectBtn.onclick = clearStagingArea;
 }
 
@@ -139,7 +159,7 @@ function clearStagingArea() {
   if (stagingRow) stagingRow.style.display = "none";
 }
 
-function processStagedPacket(packet) {
+function processStagedPacket(packet, isNegative) {
   const {
     timestamp,
     lq_zone,
@@ -149,52 +169,75 @@ function processStagedPacket(packet) {
     goal,
   } = packet;
 
-  const Y_OFFSET = 0.02;
-  const center = lq_zone.position;
-  const lqCorners = [
-    new Vector3(
-      center.x - lq_zone.scale.x / 2,
-      Y_OFFSET,
-      center.z - lq_zone.scale.y / 2
-    ),
-    new Vector3(
-      center.x + lq_zone.scale.x / 2,
-      Y_OFFSET,
-      center.z - lq_zone.scale.y / 2
-    ),
-    new Vector3(
-      center.x + lq_zone.scale.x / 2,
-      Y_OFFSET,
-      center.z + lq_zone.scale.y / 2
-    ),
-    new Vector3(
-      center.x - lq_zone.scale.x / 2,
-      Y_OFFSET,
-      center.z + lq_zone.scale.y / 2
-    ),
-  ];
-  const lq_object = {
-    center: center.clone(),
-    corners: lqCorners,
-    area: calculatePolygonArea(lqCorners),
-  };
+  let ground_truth_labels;
+
+  if (isNegative) {
+    // For negative samples, we create null/zero ground truth data.
+    ground_truth_labels = {
+      target_lq_box: null, // Use null to indicate no box
+      target_ls_score: 0.0,
+    };
+  } else {
+    // This is the original logic for positive (LQ) samples
+    const Y_OFFSET = 0.02;
+    const center = lq_zone.position;
+    const lqCorners = [
+      new Vector3(
+        center.x - lq_zone.scale.x / 2,
+        Y_OFFSET,
+        center.z - lq_zone.scale.y / 2
+      ),
+      new Vector3(
+        center.x + lq_zone.scale.x / 2,
+        Y_OFFSET,
+        center.z - lq_zone.scale.y / 2
+      ),
+      new Vector3(
+        center.x + lq_zone.scale.x / 2,
+        Y_OFFSET,
+        center.z + lq_zone.scale.y / 2
+      ),
+      new Vector3(
+        center.x - lq_zone.scale.x / 2,
+        Y_OFFSET,
+        center.z + lq_zone.scale.y / 2
+      ),
+    ];
+    const lq_object = {
+      center: center.clone(),
+      corners: lqCorners,
+      area: calculatePolygonArea(lqCorners),
+    };
+
+    const carrier = playerManager.playerInPossession;
+    const defenders = playerManager.getAllTeamPlayers(
+      attackingTeamName === playerManager.metadata.home_team.name
+        ? playerManager.metadata.away_team.name
+        : playerManager.metadata.home_team.name
+    );
+    const attackers = playerManager.getAllTeamPlayers(attackingTeamName);
+
+    const scores = calculateLs(
+      lq_object,
+      carrier,
+      defenders,
+      attackers,
+      goal,
+      attackingDirection
+    );
+
+    ground_truth_labels = {
+      target_lq_box: {
+        center_x: lq_object.center.x,
+        center_z: lq_object.center.z,
+        width: lq_zone.scale.x,
+        height: lq_zone.scale.y,
+      },
+      target_ls_score: scores.final_ls,
+    };
+  }
 
   const carrier = playerManager.playerInPossession;
-  const defenders = playerManager.getAllTeamPlayers(
-    attackingTeamName === playerManager.metadata.home_team.name
-      ? playerManager.metadata.away_team.name
-      : playerManager.metadata.home_team.name
-  );
-  const attackers = playerManager.getAllTeamPlayers(attackingTeamName);
-
-  const scores = calculateLs(
-    lq_object,
-    carrier,
-    defenders,
-    attackers,
-    goal,
-    attackingDirection
-  );
   const globalFeatures = calculateGlobalFeatures(
     playerManager,
     attackingTeamName,
@@ -205,16 +248,10 @@ function processStagedPacket(packet) {
     metadata: {
       timestamp_ms: timestamp,
       attacking_team_name: attackingTeamName,
+      carrier_id: carrier ? carrier.playerData.id : null,
+      attacking_direction: attackingDirection,
     },
-    ground_truth_labels: {
-      target_lq_box: {
-        center_x: lq_object.center.x,
-        center_z: lq_object.center.z,
-        width: lq_zone.scale.x,
-        height: lq_zone.scale.y,
-      },
-      target_ls_score: scores.final_ls,
-    },
+    ground_truth_labels: ground_truth_labels,
     input_features: {
       player_data: Array.from(playerManager.playerMap.values()).map((p) => ({
         id: p.playerData.id,
@@ -226,38 +263,9 @@ function processStagedPacket(packet) {
         vz: p.velocity.z,
       })),
       global_feature_vector: globalFeatures,
-      lq_specific_feature_vector: {
-        final_threat_score: scores.threatPotentialScore,
-        final_exploitation_score: scores.exploitationScore,
-        final_feasibility_score: scores.feasibilityScore,
-
-        threat_proximity: scores.details.threat.proximityThreat,
-        threat_strategic: scores.details.threat.strategicThreat,
-        threat_combined: scores.details.threat.combinedProximityScore,
-        threat_angle_factor: scores.details.threat.goalAngleFactor,
-        threat_area_amplifier: scores.details.threat.areaAmplifier,
-
-        exploit_def_agg_prob: scores.details.exploit.defAggProb,
-        exploit_def_fastest_tta: scores.details.exploit.defFastestTime,
-        exploit_def_recovery_score: scores.details.exploit.defRecoveryScore,
-        exploit_def_swarm_score: scores.details.exploit.defSwarmScore,
-        exploit_def_control_score: scores.details.exploit.defensiveControl,
-        exploit_att_agg_support: scores.details.exploit.aggAttSupport,
-        exploit_att_fastest_tta: scores.details.exploit.attFastestTime,
-        exploit_att_support_score: scores.details.exploit.attSupportScore,
-        exploit_overload_factor: scores.details.exploit.overloadFactor,
-        exploit_attacking_potential: scores.details.exploit.attackingPotential,
-        exploit_speed_bonus: scores.details.exploit.speedBonus,
-
-        feasy_pressure_on_carrier_dist: scores.details.feasy.pressureDist,
-        feasy_pressure_factor: scores.details.feasy.pressureFactor,
-        feasy_pass_dist_to_lq: carrier.mesh.position.distanceTo(
-          lq_object.center
-        ),
-        feasy_pass_dist_factor: scores.details.feasy.passDistFactor,
-        feasy_num_interceptors: scores.details.feasy.numInterceptors,
-        feasy_obstruction_factor: scores.details.feasy.obstructionFactor,
-      },
+      // CRITICAL: Set this to null to prevent data leakage.
+      // The AI model must learn to predict the score, not be given the answer.
+      lq_specific_feature_vector: null,
       raster_input_channels: {
         player_position_map_path: `data/positions/frame_${timestamp}.npy`,
         voronoi_freespace_map_path: `data/voronoi/frame_${timestamp}.npy`,
@@ -272,24 +280,25 @@ function addEntryToTable(entry) {
   const tbody = document.getElementById("data-table-body");
   if (!tbody) return;
   const row = document.createElement("tr");
+
+  const isNegative = entry.ground_truth_labels.target_lq_box === null;
+
   const dataForTable = {
     time: (entry.metadata.timestamp_ms / 1000).toFixed(1) + "s",
     ls: entry.ground_truth_labels.target_ls_score.toFixed(2),
-    threat:
-      entry.input_features.lq_specific_feature_vector.final_threat_score.toFixed(
-        2
-      ),
-    exploit:
-      entry.input_features.lq_specific_feature_vector.final_exploitation_score.toFixed(
-        2
-      ),
-    feasy:
-      entry.input_features.lq_specific_feature_vector.final_feasibility_score.toFixed(
-        2
-      ),
-    lq_x: entry.ground_truth_labels.target_lq_box.center_x.toFixed(1),
-    lq_z: entry.ground_truth_labels.target_lq_box.center_z.toFixed(1),
+    type: isNegative ? "Negative" : "Positive",
+    lq_x: isNegative
+      ? "N/A"
+      : entry.ground_truth_labels.target_lq_box.center_x.toFixed(1),
+    lq_z: isNegative
+      ? "N/A"
+      : entry.ground_truth_labels.target_lq_box.center_z.toFixed(1),
   };
+
+  if (isNegative) {
+    row.style.background = "rgba(0, 51, 102, 0.4)"; // Style for negative rows
+  }
+
   Object.values(dataForTable).forEach((text) => {
     const td = document.createElement("td");
     td.innerText = text;
@@ -301,7 +310,10 @@ function addEntryToTable(entry) {
 }
 
 function exportToJsonl() {
-  if (collectedEntries.length === 0) return;
+  if (collectedEntries.length === 0) {
+    alert("No data collected to export.");
+    return;
+  }
   const jsonlString = collectedEntries
     .map((entry) => JSON.stringify(entry))
     .join("\n");
@@ -311,7 +323,10 @@ function exportToJsonl() {
   const link = document.createElement("a");
   const url = URL.createObjectURL(blob);
   link.setAttribute("href", url);
-  link.setAttribute("download", `mlds_data_${new Date().toISOString()}.jsonl`);
+  link.setAttribute(
+    "download",
+    `mlds_data_${new Date().toISOString().split("T")[0]}.jsonl`
+  );
   link.style.visibility = "hidden";
   document.body.appendChild(link);
   link.click();
