@@ -278,8 +278,8 @@ window.addEventListener("keydown", (event) => {
     // case 'e':
     //   document.getElementById('tool-erase')?.click();
     //   break;
-    // case 'z':
-    //   document.getElementById('tool-zone-box')?.click();
-    //   break;
+    case "z":
+      document.getElementById("tool-zone-box")?.click();
+      break;
   }
 });

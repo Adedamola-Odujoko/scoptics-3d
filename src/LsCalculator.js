@@ -10,7 +10,7 @@ export function calculateLs(
   lq,
   carrier,
   defenders,
-  otherAttackers,
+  attackers,
   goal,
   attackingDirection
 ) {
@@ -18,14 +18,10 @@ export function calculateLs(
     lq,
     goal,
     defenders,
-    otherAttackers,
+    attackers,
     attackingDirection
   );
-  const exploitDetails = calculateExploitationScore(
-    lq,
-    defenders,
-    otherAttackers
-  );
+  const exploitDetails = calculateExploitationScore(lq, defenders, attackers);
   const feasyDetails = calculateFeasibilityScore(lq, carrier, defenders);
 
   const threatPotentialScore = threatDetails.potential;
@@ -60,7 +56,7 @@ function calculateThreatPotential(
   lq,
   goal,
   defenders,
-  otherAttackers,
+  attackers,
   attackingDirection
 ) {
   const MIDPOINT_DISTANCE = 30,
@@ -75,7 +71,7 @@ function calculateThreatPotential(
     lq,
     goal,
     defenders,
-    otherAttackers,
+    attackers,
     attackingDirection
   );
   const combinedProximityScore = Math.max(proximityThreat, strategicThreat);
@@ -103,11 +99,10 @@ function calculateStrategicBonus(
   lq,
   goal,
   defenders,
-  otherAttackers,
+  attackers,
   attackingDirection
 ) {
-  if (!defenders.length || !otherAttackers.length || !attackingDirection)
-    return 0.0;
+  if (!defenders.length || !attackers.length || !attackingDirection) return 0.0;
   let lastDefender = null;
   let offsideLineX;
   if (attackingDirection < 0) {
@@ -135,7 +130,7 @@ function calculateStrategicBonus(
   if (!isBehindLine) return 0.0;
   const { fastestTimeToArrival: attTTA } = calculateTeamControlMetrics(
     lq.center,
-    otherAttackers
+    attackers
   );
   const { fastestTimeToArrival: defTTA } = calculateTeamControlMetrics(
     lq.center,
@@ -147,41 +142,70 @@ function calculateStrategicBonus(
   return isFinite(bonus) ? bonus : 0;
 }
 
-function calculateExploitationScore(lq, defenders, otherAttackers) {
+function calculateExploitationScore(lq, defenders, attackers, carrier) {
   const ANALYSIS_RADIUS = 20;
+
+  // --- Defensive Side ---
+  const DEF_LAMBDA = 0.5; // Slightly more aggressive decay
   const defendersNearLq = defenders.filter(
     (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
-  const { fastestTimeToArrival: defFastestTime } = calculateTeamControlMetrics(
-    lq.center,
-    defendersNearLq
+
+  let defFastestTime = 99;
+  let defAggProb = 0.0;
+  if (defendersNearLq.length > 0) {
+    const { fastestTimeToArrival, ttas } = calculateTeamControlMetrics(
+      lq.center,
+      defendersNearLq
+    );
+    defFastestTime = fastestTimeToArrival;
+    const defProbs = ttas.map((t) => Math.exp(-DEF_LAMBDA * t));
+    defAggProb = defProbs.reduce((s, v) => s + v, 0);
+  }
+
+  const defRecoveryScore = Math.exp(-0.3 * defFastestTime);
+
+  // FIX #1: Make swarm score much more sensitive
+  const SWARM_SENSITIVITY = 5; // Was 0.4. Now much more punishing.
+  const defSwarmScore = 1 / (1 + defAggProb * SWARM_SENSITIVITY);
+
+  const defensiveControl = defRecoveryScore * 0.6 + (1 - defSwarmScore) * 0.4;
+
+  const potentialReceivers = attackers.filter(
+    (p) =>
+      p !== carrier && p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
   );
-  const defRecoveryScore = Math.exp(-0.5 * defFastestTime);
-  const defSwarmScore = 1 / (1 + defendersNearLq.length * 0.5);
-  const defensiveControl = defRecoveryScore * 0.7 + defSwarmScore * 0.3;
-  const attackersNearLq = otherAttackers.filter(
-    (p) => p.mesh.position.distanceTo(lq.center) < ANALYSIS_RADIUS
-  );
-  const attSupport =
-    attackersNearLq.length === 0
-      ? { potential: 0.1, tta: 5, score: 0, overload: 0 }
-      : (() => {
-          const { fastestTimeToArrival: tta } = calculateTeamControlMetrics(
-            lq.center,
-            attackersNearLq
-          );
-          const score = Math.exp(-0.5 * tta);
-          const overload = Math.min(
-            1.0,
-            (attackersNearLq.length + 0.5) / (defendersNearLq.length + 1.5)
-          );
-          const potential = score * 0.5 + overload * 0.5;
-          return { potential, tta, score, overload };
-        })();
+
+  let attFastestTime = 99;
+  let aggAttSupport = 0;
+  let attSupportScore = 0.0;
+  if (potentialReceivers.length > 0) {
+    // --- THIS IS THE KEY CHANGE ---
+    // Pass the carrier's position to use the new "intercept point" logic
+    const { fastestTimeToArrival, ttas } = calculateTeamControlMetrics(
+      lq.center,
+      potentialReceivers,
+      carrier
+    );
+
+    attFastestTime = fastestTimeToArrival;
+    aggAttSupport = ttas
+      .map((t) => Math.exp(-0.2 * t))
+      .reduce((s, v) => s + v, 0);
+    attSupportScore = Math.tanh(aggAttSupport * 2.0);
+  }
+
+  // --- Overload and Final Assembly ---
+  const OVERLOAD_SCALE = 5.0;
+  const overloadScore =
+    1 / (1 + Math.exp(-OVERLOAD_SCALE * (aggAttSupport - defAggProb)));
+  const arrivalTimeAdvantage = Math.max(0, defFastestTime - attFastestTime);
+  const speedBonus = 1 + Math.tanh(arrivalTimeAdvantage * 0.2) * 0.45;
+  const baseAttackingPotential = attSupportScore * 0.6 + overloadScore * 0.4;
+  const DEFENSIVE_PENALTY_EXPONENT = 0.7;
   const exploitationScore =
-    attSupport.potential * Math.pow(1 - defensiveControl, 0.5);
-  const arrivalTimeAdvantage = Math.max(0, defFastestTime - attSupport.tta);
-  const speedBonus = 1 + Math.min(0.5, arrivalTimeAdvantage * 0.25);
+    baseAttackingPotential *
+    Math.pow(1 - defensiveControl, DEFENSIVE_PENALTY_EXPONENT);
   const finalScore = Math.min(1.0, exploitationScore * speedBonus);
 
   return {
@@ -190,10 +214,10 @@ function calculateExploitationScore(lq, defenders, otherAttackers) {
     defRecoveryScore,
     defSwarmScore,
     defensiveControl,
-    attFastestTime: attSupport.tta,
-    attSupportScore: attSupport.score,
-    overloadFactor: attSupport.overload,
-    attackingPotential: attSupport.potential,
+    attFastestTime,
+    attSupportScore,
+    overloadFactor: overloadScore,
+    attackingPotential: baseAttackingPotential,
     speedBonus,
   };
 }
@@ -229,20 +253,70 @@ function calculateFeasibilityScore(lq, carrier, defenders) {
   };
 }
 
-function calculateTeamControlMetrics(target, players) {
-  if (players.length === 0) return { fastestTimeToArrival: 99 };
-  let fastestTimeToArrival = Infinity;
-  players.forEach((p) => {
+function calculateTeamControlMetrics(target, players, carrierPosition = null) {
+  // If no carrier position is provided, fall back to the old, simpler logic (for defenders).
+  if (!carrierPosition) {
+    if (players.length === 0) return { fastestTimeToArrival: 99, ttas: [] };
+    const MIN_EFFECTIVE_SPEED = 1.0;
+    const ttas = players.map((p) => {
+      if (typeof p.currentSpeed !== "number" || isNaN(p.currentSpeed))
+        p.currentSpeed = 0;
+      return (
+        p.mesh.position.distanceTo(target) /
+        Math.max(p.currentSpeed, MIN_EFFECTIVE_SPEED)
+      );
+    });
+    const fastestTimeToArrival = Math.min(...ttas);
+    return {
+      fastestTimeToArrival: isFinite(fastestTimeToArrival)
+        ? fastestTimeToArrival
+        : 99,
+      ttas,
+    };
+  }
+
+  // --- NEW "INTERCEPT POINT" LOGIC for attackers ---
+  if (players.length === 0) return { fastestTimeToArrival: 99, ttas: [] };
+
+  const AVERAGE_PASS_SPEED = 15.0; // m/s. TUNABLE. Higher for driven passes, lower for lofted.
+  const MIN_EFFECTIVE_SPEED = 2.0;
+
+  const timeForBallToTravel =
+    carrierPosition.distanceTo(target) / AVERAGE_PASS_SPEED;
+
+  const ttas = players.map((p) => {
     if (typeof p.currentSpeed !== "number" || isNaN(p.currentSpeed))
       p.currentSpeed = 0;
-    const timeToArrival =
-      p.mesh.position.distanceTo(target) / Math.max(p.currentSpeed, 8.0);
-    if (timeToArrival < fastestTimeToArrival)
-      fastestTimeToArrival = timeToArrival;
+    const effectiveSpeed = Math.max(p.currentSpeed, MIN_EFFECTIVE_SPEED);
+
+    // 1. Project player's future position based on how long the pass will take.
+    const projectedPlayerPos = new Vector3();
+    projectedPlayerPos
+      .copy(p.mesh.position)
+      .addScaledVector(p.velocity, timeForBallToTravel);
+
+    // 2. The new "target" is a blend between the original LQ center and the player's projected path.
+    // This prevents the target from being dragged too far away by a player running away from the space.
+    const interceptPoint = new Vector3().lerpVectors(
+      target,
+      projectedPlayerPos,
+      0.5
+    );
+
+    // 3. The time to arrival is now the time for the PLAYER to reach this new intercept point.
+    const timeToIntercept =
+      p.mesh.position.distanceTo(interceptPoint) / effectiveSpeed;
+
+    // The final "effective" time is the LONGER of the two: the time the ball takes OR the time the player takes.
+    // A pass is only complete when both have arrived.
+    return Math.max(timeForBallToTravel, timeToIntercept);
   });
+
+  const fastestTimeToArrival = Math.min(...ttas);
   return {
     fastestTimeToArrival: isFinite(fastestTimeToArrival)
       ? fastestTimeToArrival
       : 99,
+    ttas,
   };
 }

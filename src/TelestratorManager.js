@@ -872,14 +872,15 @@ export class TelestratorManager {
     }
 
     const carrier = playerInPossession;
+    const attackingTeamName = carrier.playerData.team;
     const homeTeamName = this.playerManager.metadata.home_team.name;
     const isCarrierHomeTeam = carrier.playerData.team === homeTeamName;
     const defendingTeamName = isCarrierHomeTeam
       ? this.playerManager.metadata.away_team.name
       : homeTeamName;
-    const otherAttackers = this.playerManager
-      .getAllTeamPlayers(carrier.playerData.team)
-      .filter((p) => p !== carrier && p && p.mesh);
+    const attackers = this.playerManager
+      .getAllTeamPlayers(attackingTeamName)
+      .filter((p) => p && p.mesh);
     const defenders = this.playerManager
       .getAllTeamPlayers(defendingTeamName)
       .filter((p) => p && p.mesh);
@@ -937,7 +938,7 @@ export class TelestratorManager {
       lq,
       carrier,
       defenders,
-      otherAttackers,
+      attackers,
       goal,
       attackingDirection
     );
@@ -947,7 +948,7 @@ export class TelestratorManager {
       carrier.mesh.position,
       lq.corners
     );
-    const attackersNearLq = otherAttackers.filter(
+    const attackersNearLq = attackers.filter(
       (p) => p.mesh.position.distanceTo(lq.center) < 20
     );
     const defendersNearLq = defenders.filter(
