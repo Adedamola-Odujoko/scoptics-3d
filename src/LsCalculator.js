@@ -228,7 +228,7 @@ function calculateFeasibilityScore(lq, carrier, defenders) {
     defenders
   );
   const pressureFactor =
-    1 / (1 + Math.exp(-1.5 * ((pressureDist || 99) - 2.0)));
+    1 / (1 + Math.exp(-1.5 * ((pressureDist || 99) - 3.0)));
   const { points: conePoints } = getPassingCone(
     carrier.mesh.position,
     lq.corners
@@ -241,7 +241,7 @@ function calculateFeasibilityScore(lq, carrier, defenders) {
     -0.03 * carrier.mesh.position.distanceTo(lq.center)
   );
   const finalScore =
-    obstructionFactor * 0.5 + pressureFactor * 0.35 + passDistFactor * 0.15;
+    obstructionFactor * 0.45 + pressureFactor * 0.3 + passDistFactor * 0.25;
 
   return {
     finalScore: isFinite(finalScore) ? finalScore : 0,
